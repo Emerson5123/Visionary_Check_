@@ -5,8 +5,8 @@ class BillRecord {
   final DateTime date;
   final String imagePath;
   final bool isAuthentic;
-  final String confidence; // Porcentaje de confianza
-  final String denomination; // Denominación del billete
+  final String confidence;
+  final String denomination;
 
   BillRecord({
     required this.id,
@@ -27,17 +27,23 @@ class BillRecord {
       'isAuthentic': isAuthentic ? 1 : 0,
       'confidence': confidence,
       'denomination': denomination,
+      'createdAt': DateTime.now().toIso8601String(),
     };
   }
 
   factory BillRecord.fromMap(Map<String, dynamic> map) {
     return BillRecord(
-      id: map['id'],
-      date: DateTime.parse(map['date']),
-      imagePath: map['imagePath'],
+      id: map['id'] ?? '',
+      date: DateTime.parse(map['date'] ?? DateTime.now().toIso8601String()),
+      imagePath: map['imagePath'] ?? '',
       isAuthentic: map['isAuthentic'] == 1,
-      confidence: map['confidence'],
-      denomination: map['denomination'],
+      confidence: map['confidence'] ?? '0%',
+      denomination: map['denomination'] ?? 'Desconocida',
     );
+  }
+
+  @override
+  String toString() {
+    return 'BillRecord(id: $id, date: $date, denomination: $denomination, isAuthentic: $isAuthentic, confidence: $confidence)';
   }
 }

@@ -43,7 +43,7 @@ class MLModelService {
         return BillDetectionResult(
           isBill: false,
           isAuthentic: false,
-          confidence: 0.0,
+          confidence: '0.0',
           denomination: 'Desconocida',
           details: 'No se pudo procesar la imagen',
         );

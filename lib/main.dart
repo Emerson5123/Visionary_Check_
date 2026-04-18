@@ -1,7 +1,31 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
+import 'services/database_service.dart';
+import 'services/reference_dataset_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  print('🚀 Inicializando Visionary Check...');
+
+  // 1. Inicializar BD
+  final dbService = DatabaseService();
+  try {
+    await dbService.database;
+    print('✅ Base de datos inicializada');
+  } catch (e) {
+    print('❌ Error BD: $e');
+  }
+
+  // 2. Indexar dataset de assets
+  final refService = ReferenceDatasetService();
+  try {
+    await refService.indexAssetDataset();
+    print('✅ Dataset de referencia indexado');
+  } catch (e) {
+    print('❌ Error indexando dataset: $e');
+  }
+
   runApp(const MyApp());
 }
 
