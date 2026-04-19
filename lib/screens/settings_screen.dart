@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../widgets/custom_app_bar.dart';
+import '../widgets/accessible_widget.dart';
 import '../services/tts_service.dart';
+import '../services/accessibility_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -10,232 +12,221 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final TTSService _ttsService = TTSService();
+  final TTSService _tts = TTSService();
+  final AccessibilityService _accessibility = AccessibilityService();
+
   String _selectedLanguage = 'es-ES';
-  double _volume = 1.0;
-  double _speechRate = 0.5;
-  bool _enableVoice = true;
+  double _volume           = 1.0;
+  double _speechRate       = 0.5;
+  bool   _enableVoice      = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _accessibility.clearFocus();
+    _announceScreen();
+  }
+
+  void _announceScreen() async {
+    await Future.delayed(const Duration(milliseconds: 400));
+    await _tts.speak(
+      'Pantalla de configuración. '
+          'Toca un elemento para escucharlo, doble toque para activarlo.',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: const CustomAppBar(title: 'Configuración'),
+      appBar: CustomAppBar(
+        title: 'Configuración',
+        showBackButton: true,
+        onBackPressed: () => Navigator.pop(context),
+      ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Colors.deepPurple.shade900,
-              Colors.deepPurple.shade500,
-            ],
+            colors: [Colors.deepPurple.shade900, Colors.deepPurple.shade500],
           ),
         ),
         child: ListView(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16),
           children: [
-            // Sección: Voz
-            _buildSectionTitle('Configuración de Voz'),
-            const SizedBox(height: 16),
 
-            // Toggle: Habilitar voz
-            Card(
-              color: Colors.white.withOpacity(0.1),
-              child: SwitchListTile(
-                title: const Text(
-                  'Habilitar Retroalimentación de Voz',
-                  style: TextStyle(color: Colors.white),
-                ),
-                value: _enableVoice,
-                onChanged: (value) {
-                  setState(() => _enableVoice = value);
-                  _ttsService.speak(
-                    value ? 'Voz habilitada' : 'Voz deshabilitada',
-                  );
-                },
-                activeColor: Colors.amber,
-              ),
-            ),
-            const SizedBox(height: 12),
+            _sectionTitle('Configuración de Voz'),
+            const SizedBox(height: 14),
 
-            // Slider: Volumen
-            Card(
-              color: Colors.white.withOpacity(0.1),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Volumen',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Slider(
-                      value: _volume,
-                      onChanged: (value) {
-                        setState(() => _volume = value);
-                        _ttsService.speak('Volumen ajustado');
-                      },
-                      min: 0.0,
-                      max: 1.0,
-                      activeColor: Colors.amber,
-                      inactiveColor: Colors.white.withOpacity(0.3),
-                    ),
-                  ],
+            AccessibleWidget(
+              description: _enableVoice
+                  ? 'Interruptor: Voz activada. Doble toque para desactivar.'
+                  : 'Interruptor: Voz desactivada. Doble toque para activar.',
+              onActivate: () {
+                setState(() => _enableVoice = !_enableVoice);
+                _tts.speak(_enableVoice ? 'Voz activada' : 'Voz desactivada');
+              },
+              child: Card(
+                color: Colors.white.withOpacity(0.1),
+                child: SwitchListTile(
+                  title: const Text('Retroalimentación de Voz', style: TextStyle(color: Colors.white)),
+                  value: _enableVoice,
+                  onChanged: null,
+                  activeColor: Colors.amber,
                 ),
               ),
             ),
             const SizedBox(height: 12),
 
-            // Slider: Velocidad de habla
-            Card(
-              color: Colors.white.withOpacity(0.1),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Velocidad de Habla',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+            AccessibleWidget(
+              description: 'Control de volumen. Valor actual: ${(_volume * 100).toInt()} por ciento. Doble toque para escuchar.',
+              onActivate: () => _tts.speak('Volumen al ${(_volume * 100).toInt()} por ciento.'),
+              child: Card(
+                color: Colors.white.withOpacity(0.1),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Volumen: ${(_volume * 100).toInt()}%',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                      Slider(
+                        value: _volume,
+                        onChanged: (v) => setState(() => _volume = v),
+                        onChangeEnd: (v) => _tts.speak('Volumen al ${(v * 100).toInt()} por ciento'),
+                        min: 0.0, max: 1.0,
+                        activeColor: Colors.amber,
+                        inactiveColor: Colors.white.withOpacity(0.3),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Slider(
-                      value: _speechRate,
-                      onChanged: (value) {
-                        setState(() => _speechRate = value);
-                      },
-                      min: 0.1,
-                      max: 1.0,
-                      activeColor: Colors.amber,
-                      inactiveColor: Colors.white.withOpacity(0.3),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
+            const SizedBox(height: 12),
+
+            AccessibleWidget(
+              description: 'Control de velocidad de habla. Valor actual: ${(_speechRate * 100).toInt()} por ciento. Doble toque para escuchar.',
+              onActivate: () => _tts.speak('Velocidad al ${(_speechRate * 100).toInt()} por ciento.'),
+              child: Card(
+                color: Colors.white.withOpacity(0.1),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Velocidad: ${(_speechRate * 100).toInt()}%',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                      Slider(
+                        value: _speechRate,
+                        onChanged: (v) => setState(() => _speechRate = v),
+                        onChangeEnd: (v) {
+                          _tts.setSpeechRate(v);
+                          _tts.speak('Velocidad ajustada');
+                        },
+                        min: 0.1, max: 1.0,
+                        activeColor: Colors.amber,
+                        inactiveColor: Colors.white.withOpacity(0.3),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
             const SizedBox(height: 24),
+            _sectionTitle('Idioma de Voz'),
+            const SizedBox(height: 14),
 
-            // Sección: Idioma
-            _buildSectionTitle('Idioma'),
-            const SizedBox(height: 16),
-
-            Card(
-              color: Colors.white.withOpacity(0.1),
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: DropdownButton<String>(
-                  value: _selectedLanguage,
-                  dropdownColor: Colors.deepPurple.shade700,
-                  items: [
-                    DropdownMenuItem(
-                      value: 'es-ES',
-                      child: Row(
-                        children: const [
-                          Icon(Icons.language, color: Colors.white),
-                          SizedBox(width: 8),
-                          Text(
-                            'Español',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ],
-                      ),
-                    ),
-                    DropdownMenuItem(
-                      value: 'en-US',
-                      child: Row(
-                        children: const [
-                          Icon(Icons.language, color: Colors.white),
-                          SizedBox(width: 8),
-                          Text(
-                            'English',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _selectedLanguage = value);
-                      _ttsService.setLanguage(value);
-                      _ttsService.speak(
-                        value == 'es-ES' ? 'Idioma cambiado a español' : 'Language changed to English',
-                      );
-                    }
-                  },
-                  underline: Container(),
-                  isExpanded: true,
-                ),
-              ),
+            AccessibleButton(
+              description: 'Idioma Español. ${_selectedLanguage == 'es-ES' ? 'Actualmente seleccionado.' : 'Doble toque para seleccionar.'}',
+              label: _selectedLanguage == 'es-ES' ? 'Español ✓' : 'Español',
+              onActivate: () {
+                setState(() => _selectedLanguage = 'es-ES');
+                _tts.setLanguage('es-ES');
+                _tts.speak('Idioma cambiado a español');
+              },
+              backgroundColor: _selectedLanguage == 'es-ES' ? Colors.amber : Colors.white.withOpacity(0.15),
+              textColor: _selectedLanguage == 'es-ES' ? Colors.black : Colors.white,
+              height: 56,
             ),
+            const SizedBox(height: 10),
+
+            AccessibleButton(
+              description: 'Idioma Inglés. ${_selectedLanguage == 'en-US' ? 'Actualmente seleccionado.' : 'Doble toque para seleccionar.'}',
+              label: _selectedLanguage == 'en-US' ? 'English ✓' : 'English',
+              onActivate: () {
+                setState(() => _selectedLanguage = 'en-US');
+                _tts.setLanguage('en-US');
+                _tts.speak('Language changed to English');
+              },
+              backgroundColor: _selectedLanguage == 'en-US' ? Colors.amber : Colors.white.withOpacity(0.15),
+              textColor: _selectedLanguage == 'en-US' ? Colors.black : Colors.white,
+              height: 56,
+            ),
+
             const SizedBox(height: 24),
+            _sectionTitle('Prueba de Voz'),
+            const SizedBox(height: 14),
 
-            // Sección: Sobre
-            _buildSectionTitle('Sobre la Aplicación'),
-            const SizedBox(height: 16),
+            AccessibleButton(
+              description: 'Botón probar voz. Doble toque para escuchar un mensaje de prueba.',
+              label: 'Probar Voz',
+              onActivate: () => _tts.speak(
+                'Esta es una prueba de voz. El volumen y velocidad están correctamente configurados.',
+              ),
+              backgroundColor: Colors.teal,
+              textColor: Colors.white,
+              icon: Icons.volume_up,
+              height: 56,
+            ),
 
-            Card(
-              color: Colors.white.withOpacity(0.1),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildInfoRow('Versión', '1.0.0'),
-                    const SizedBox(height: 12),
-                    _buildInfoRow('Desarrollador', 'Nathalia'),
-                    const SizedBox(height: 12),
-                    _buildInfoRow('Año', '2026'),
-                  ],
+            const SizedBox(height: 24),
+            _sectionTitle('Acerca de la Aplicación'),
+            const SizedBox(height: 14),
+
+            AccessibleWidget(
+              description: 'Información: Versión 1.0.0. Desarrollado por Nathalia. Año 2026.',
+              onActivate: () => _tts.speak('Versión 1.0.0. Desarrollado por Nathalia. Año 2026.'),
+              child: Card(
+                color: Colors.white.withOpacity(0.1),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      _infoRow('Versión', '1.0.0'),
+                      const SizedBox(height: 10),
+                      _infoRow('Desarrollador', 'Nathalia'),
+                      const SizedBox(height: 10),
+                      _infoRow('Año', '2026'),
+                    ],
+                  ),
                 ),
               ),
             ),
+
+            const SizedBox(height: 20),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Text(
-      title,
-      style: const TextStyle(
-        fontSize: 20,
-        fontWeight: FontWeight.bold,
-        color: Colors.white,
-      ),
+  Widget _sectionTitle(String title) {
+    return AccessibleWidget(
+      description: 'Sección: $title',
+      onActivate: () => _tts.speak(title),
+      child: Text(title,
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
     );
   }
 
-  Widget _buildInfoRow(String label, String value) {
+  Widget _infoRow(String label, String value) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.7),
-            fontSize: 14,
-          ),
-        ),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 14,
-          ),
-        ),
+        Text(label, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14)),
+        Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
       ],
     );
   }

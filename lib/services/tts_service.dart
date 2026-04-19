@@ -4,13 +4,8 @@ class TTSService {
   static final TTSService _instance = TTSService._internal();
   final FlutterTts _flutterTts = FlutterTts();
 
-  factory TTSService() {
-    return _instance;
-  }
-
-  TTSService._internal() {
-    _initTTS();
-  }
+  factory TTSService() => _instance;
+  TTSService._internal() { _initTTS(); }
 
   void _initTTS() async {
     await _flutterTts.setLanguage("es-ES");
@@ -19,15 +14,9 @@ class TTSService {
     await _flutterTts.setPitch(1.0);
   }
 
-  Future<void> speak(String text) async {
-    await _flutterTts.speak(text);
-  }
-
-  Future<void> stop() async {
-    await _flutterTts.stop();
-  }
-
-  Future<void> setLanguage(String language) async {
-    await _flutterTts.setLanguage(language);
-  }
+  Future<void> speak(String text)        async => await _flutterTts.speak(text);
+  Future<void> stop()                    async => await _flutterTts.stop();
+  Future<void> setLanguage(String l)     async => await _flutterTts.setLanguage(l);
+  Future<void> setSpeechRate(double r)   async => await _flutterTts.setSpeechRate(r);
+  Future<void> setVolume(double v)       async => await _flutterTts.setVolume(v);
 }

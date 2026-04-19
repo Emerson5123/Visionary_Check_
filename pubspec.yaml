@@ -11,7 +11,6 @@ dependencies:
   flutter:
     sdk: flutter
 
-
   cupertino_icons: ^1.0.8
   camera: ^0.10.5
   image_picker: ^1.0.4
@@ -24,16 +23,16 @@ dependencies:
   image: ^4.1.0
   uuid: ^4.0.0
   path_provider: ^2.1.0
+  google_mlkit_text_recognition: ^0.14.0
+  google_mlkit_image_labeling: ^0.13.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
   flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
-
   assets:
     - assets/models/
     - assets/datasets/

@@ -7,6 +7,7 @@ class BillRecord {
   final bool isAuthentic;
   final String confidence;
   final String denomination;
+  final String currency;   // 'USD' | 'ECU' | 'UNKNOWN'
 
   BillRecord({
     required this.id,
@@ -15,6 +16,7 @@ class BillRecord {
     required this.isAuthentic,
     required this.confidence,
     required this.denomination,
+    this.currency = 'UNKNOWN',
   });
 
   String get formattedDate => DateFormat('dd/MM/yyyy HH:mm').format(date);
@@ -27,6 +29,7 @@ class BillRecord {
       'isAuthentic': isAuthentic ? 1 : 0,
       'confidence': confidence,
       'denomination': denomination,
+      'currency': currency,
       'createdAt': DateTime.now().toIso8601String(),
     };
   }
@@ -39,11 +42,11 @@ class BillRecord {
       isAuthentic: map['isAuthentic'] == 1,
       confidence: map['confidence'] ?? '0%',
       denomination: map['denomination'] ?? 'Desconocida',
+      currency: map['currency'] ?? 'UNKNOWN',
     );
   }
 
   @override
-  String toString() {
-    return 'BillRecord(id: $id, date: $date, denomination: $denomination, isAuthentic: $isAuthentic, confidence: $confidence)';
-  }
+  String toString() =>
+      'BillRecord(id: $id, denomination: $denomination, currency: $currency, isAuthentic: $isAuthentic)';
 }

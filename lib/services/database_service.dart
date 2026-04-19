@@ -19,7 +19,7 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,                          // ← subimos versión por nueva columna
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE bill_records (
@@ -29,9 +29,18 @@ class DatabaseService {
             isAuthentic INTEGER NOT NULL,
             confidence TEXT NOT NULL,
             denomination TEXT NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'UNKNOWN',
             createdAt TEXT NOT NULL
           )
         ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          // Migración: agrega columna currency a BD existente
+          await db.execute(
+            "ALTER TABLE bill_records ADD COLUMN currency TEXT NOT NULL DEFAULT 'UNKNOWN'",
+          );
+        }
       },
     );
   }
