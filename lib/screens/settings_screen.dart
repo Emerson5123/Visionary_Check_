@@ -23,6 +23,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _enableVoice = _tts.voiceEnabled;
     _accessibility.clearFocus();
     _announceScreen();
   }
@@ -62,9 +63,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               description: _enableVoice
                   ? 'Interruptor: Voz activada. Doble toque para desactivar.'
                   : 'Interruptor: Voz desactivada. Doble toque para activar.',
-              onActivate: () {
-                setState(() => _enableVoice = !_enableVoice);
-                _tts.speak(_enableVoice ? 'Voz activada' : 'Voz desactivada');
+              onActivate: () async {
+                final newValue = !_enableVoice;
+                setState(() => _enableVoice = newValue);
+                await _tts.setVoiceEnabled(newValue);
+                if (newValue) await _tts.speak('Voz activada');
               },
               child: Card(
                 color: Colors.white.withOpacity(0.1),

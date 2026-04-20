@@ -7,6 +7,7 @@ import '../services/bill_detection_service.dart';
 import '../services/tts_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/bill_repository.dart';
+import '../services/permission_service.dart';
 import '../models/bill_record.dart';
 import 'result_screen.dart';
 
@@ -20,21 +21,67 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   late CameraController _cameraController;
   final BillDetectionService _detectionService = BillDetectionService();
-  final TTSService _tts = TTSService();
-  final AccessibilityService _accessibility = AccessibilityService();
-  final BillRepository _billRepository = BillRepository();
+  final TTSService           _tts              = TTSService();
+  final AccessibilityService _accessibility    = AccessibilityService();
+  final BillRepository       _billRepository   = BillRepository();
+  final PermissionService    _permissionService = PermissionService();
 
-  bool _isInitialized = false;
-  bool _isProcessing  = false;
-  bool _isCameraReady = false;
+  bool    _isInitialized     = false;
+  bool    _isProcessing      = false;
+  bool    _isCameraReady     = false;
   String? _initializationError;
+
+  // Estado del permiso
+  _PermissionState _permissionState = _PermissionState.checking;
 
   @override
   void initState() {
     super.initState();
     _accessibility.clearFocus();
-    _initializeCamera();
+    _checkAndRequestPermission();
   }
+
+  // ── Manejo de permisos ───────────────────────────────────────────────────
+
+  Future<void> _checkAndRequestPermission() async {
+    setState(() => _permissionState = _PermissionState.checking);
+
+    final result = await _permissionService.checkAndRequestCamera();
+
+    switch (result) {
+      case PermissionResult.granted:
+        setState(() => _permissionState = _PermissionState.granted);
+        _initializeCamera();
+        break;
+
+      case PermissionResult.denied:
+        setState(() => _permissionState = _PermissionState.denied);
+        await _tts.speak(
+          'Se necesita permiso de cámara para verificar billetes. '
+              'Por favor otorga el permiso e intenta de nuevo.',
+        );
+        break;
+
+      case PermissionResult.permanentlyDenied:
+        setState(() => _permissionState = _PermissionState.permanentlyDenied);
+        await _tts.speak(
+          'El permiso de cámara fue denegado permanentemente. '
+              'Ve a Configuración del teléfono, busca esta aplicación '
+              'y activa el permiso de cámara manualmente.',
+        );
+        break;
+
+      case PermissionResult.restricted:
+        setState(() => _permissionState = _PermissionState.denied);
+        await _tts.speak(
+          'El acceso a la cámara está restringido en este dispositivo. '
+              'Contacta al administrador del dispositivo.',
+        );
+        break;
+    }
+  }
+
+  // ── Inicialización de cámara ─────────────────────────────────────────────
 
   Future<void> _initializeCamera() async {
     try {
@@ -55,11 +102,15 @@ class _CameraScreenState extends State<CameraScreen> {
       await _cameraController.initialize();
 
       if (mounted) {
-        setState(() { _isInitialized = true; _isCameraReady = true; });
+        setState(() {
+          _isInitialized = true;
+          _isCameraReady = true;
+        });
         await _tts.speak(
           'Cámara lista. '
               'Coloca el billete frente a la cámara, bien iluminado y centrado. '
-              'Toca el botón de captura una vez para escucharlo, dos veces para capturar.',
+              'Toca el botón de captura una vez para escucharlo, '
+              'dos veces para capturar.',
         );
       }
     } catch (e) {
@@ -69,13 +120,15 @@ class _CameraScreenState extends State<CameraScreen> {
           _initializationError = 'Error al inicializar cámara: $e';
         });
       }
-      await _tts.speak('Error al inicializar la cámara');
+      await _tts.speak('Error al inicializar la cámara. Intenta de nuevo.');
     }
   }
 
+  // ── Captura y análisis ───────────────────────────────────────────────────
+
   Future<void> _captureAndAnalyze() async {
     if (_isProcessing || !_isInitialized || !_isCameraReady) {
-      await _tts.speak('Por favor espera, la cámara se está preparando');
+      await _tts.speak('Por favor espera, la cámara se está preparando.');
       return;
     }
 
@@ -108,7 +161,10 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ).then((_) {
           if (mounted) {
-            setState(() { _isProcessing = false; _isCameraReady = true; });
+            setState(() {
+              _isProcessing  = false;
+              _isCameraReady = true;
+            });
           }
         });
       }
@@ -166,6 +222,8 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  // ── Widgets de UI ────────────────────────────────────────────────────────
+
   Widget _buildInstructionOverlay() {
     return Positioned(
       top: 20, left: 20, right: 20,
@@ -214,7 +272,7 @@ class _CameraScreenState extends State<CameraScreen> {
       child: AccessibleWidget(
         description: 'Marco de enfoque. Coloca el billete dentro de este rectángulo.',
         onActivate: () => _tts.speak(
-          'Coloca el billete dentro del rectángulo ámbar que ves en pantalla.',
+          'Coloca el billete dentro del rectángulo ámbar en pantalla.',
         ),
         child: Container(
           decoration: BoxDecoration(
@@ -306,6 +364,190 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  // ── Pantallas de estado ──────────────────────────────────────────────────
+
+  Widget _buildCheckingPermission() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.amber),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Verificando permisos...',
+            style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPermissionDenied() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.no_photography, color: Colors.amber, size: 72),
+            const SizedBox(height: 24),
+            const Text(
+              'Permiso de Cámara Requerido',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Esta aplicación necesita acceso a la cámara '
+                  'para fotografiar y verificar billetes.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 15),
+            ),
+            const SizedBox(height: 32),
+            AccessibleButton(
+              description:
+              'Botón conceder permiso de cámara. '
+                  'Doble toque para abrir la solicitud de permiso.',
+              label: 'Conceder Permiso',
+              onActivate: _checkAndRequestPermission,
+              backgroundColor: Colors.amber,
+              textColor: Colors.black,
+              icon: Icons.camera_alt,
+              height: 60,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPermissionPermanentlyDenied() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.block, color: Colors.red, size: 72),
+            const SizedBox(height: 24),
+            const Text(
+              'Permiso Denegado',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'El permiso de cámara fue denegado permanentemente. '
+                  'Ve a Configuración del teléfono y actívalo manualmente '
+                  'para esta aplicación.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 15),
+            ),
+            const SizedBox(height: 32),
+            AccessibleButton(
+              description:
+              'Botón abrir configuración del teléfono. '
+                  'Doble toque para ir a los ajustes y activar el permiso.',
+              label: 'Abrir Configuración',
+              onActivate: () async {
+                await _tts.speak(
+                  'Abriendo configuración del teléfono. '
+                      'Busca esta aplicación y activa el permiso de cámara.',
+                );
+                await _permissionService.openSettings();
+              },
+              backgroundColor: Colors.amber,
+              textColor: Colors.black,
+              icon: Icons.settings,
+              height: 60,
+            ),
+            const SizedBox(height: 16),
+            AccessibleButton(
+              description: 'Botón reintentar permiso de cámara.',
+              label: 'Reintentar',
+              onActivate: _checkAndRequestPermission,
+              backgroundColor: Colors.blueAccent,
+              textColor: Colors.white,
+              icon: Icons.refresh,
+              height: 56,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingCamera() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.amber),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Inicializando cámara...',
+            style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCameraError() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, color: Colors.red, size: 60),
+            const SizedBox(height: 20),
+            const Text(
+              'Error de Cámara',
+              style: TextStyle(
+                color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _initializationError ?? 'Error desconocido',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white.withOpacity(0.8)),
+            ),
+            const SizedBox(height: 24),
+            AccessibleButton(
+              description: 'Botón reintentar inicializar la cámara',
+              label: 'Reintentar',
+              onActivate: () {
+                setState(() {
+                  _isInitialized     = false;
+                  _initializationError = null;
+                });
+                _initializeCamera();
+              },
+              backgroundColor: Colors.amber,
+              textColor: Colors.black,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Build principal ──────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
@@ -317,8 +559,14 @@ class _CameraScreenState extends State<CameraScreen> {
               title: const Text('¿Salir?'),
               content: const Text('Hay una captura en progreso. ¿Deseas salir?'),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')),
-                TextButton(onPressed: () => Navigator.pop(context, true),  child: const Text('Sí')),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('No'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Sí'),
+                ),
               ],
             ),
           );
@@ -340,77 +588,58 @@ class _CameraScreenState extends State<CameraScreen> {
               colors: [Colors.deepPurple.shade900, Colors.deepPurple.shade500],
             ),
           ),
-          child: !_isInitialized
-              ? _buildLoadingScreen()
-              : _initializationError != null
-              ? _buildErrorScreen()
-              : Stack(
-            children: [
-              Center(child: CameraPreview(_cameraController)),
-              _buildInstructionOverlay(),
-              _buildFocusGuide(),
-              _buildCaptureButton(),
-            ],
-          ),
+          child: _buildBody(),
         ),
       ),
     );
   }
 
-  Widget _buildLoadingScreen() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.amber),
-          ),
-          const SizedBox(height: 20),
-          Text('Inicializando cámara...',
-              style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 16)),
-        ],
-      ),
-    );
-  }
+  Widget _buildBody() {
+    // 1. Verificando permiso
+    if (_permissionState == _PermissionState.checking) {
+      return _buildCheckingPermission();
+    }
 
-  Widget _buildErrorScreen() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, color: Colors.red, size: 60),
-            const SizedBox(height: 20),
-            const Text('Error de Cámara',
-                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            Text(_initializationError ?? 'Error desconocido',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white.withOpacity(0.8))),
-            const SizedBox(height: 24),
-            AccessibleButton(
-              description: 'Botón reintentar inicializar la cámara',
-              label: 'Reintentar',
-              onActivate: () {
-                setState(() { _isInitialized = false; _initializationError = null; });
-                _initializeCamera();
-              },
-              backgroundColor: Colors.amber,
-              textColor: Colors.black,
-            ),
-          ],
-        ),
-      ),
+    // 2. Permiso denegado
+    if (_permissionState == _PermissionState.denied) {
+      return _buildPermissionDenied();
+    }
+
+    // 3. Permiso denegado permanentemente
+    if (_permissionState == _PermissionState.permanentlyDenied) {
+      return _buildPermissionPermanentlyDenied();
+    }
+
+    // 4. Permiso concedido — mostrar cámara
+    if (!_isInitialized) return _buildLoadingCamera();
+    if (_initializationError != null) return _buildCameraError();
+
+    return Stack(
+      children: [
+        Center(child: CameraPreview(_cameraController)),
+        _buildInstructionOverlay(),
+        _buildFocusGuide(),
+        _buildCaptureButton(),
+      ],
     );
   }
 
   @override
   void dispose() {
     try {
-      _cameraController.dispose();
+      if (_isInitialized && _initializationError == null) {
+        _cameraController.dispose();
+      }
       _detectionService.dispose();
     } catch (_) {}
     super.dispose();
   }
+}
+
+/// Estados internos del permiso de cámara
+enum _PermissionState {
+  checking,
+  granted,
+  denied,
+  permanentlyDenied,
 }

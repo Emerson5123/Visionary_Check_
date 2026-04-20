@@ -3,6 +3,12 @@
 <plist version="1.0">
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<key>NSCameraUsageDescription</key>
+    <string>Visionary Cash Check necesita acceso a la cámara para fotografiar billetes y verificar su autenticidad.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Visionary Cash Check necesita acceso a tus fotos para seleccionar imágenes de billetes desde la galería.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Visionary Cash Check no usa el micrófono, pero la cámara lo requiere en iOS.</string>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
