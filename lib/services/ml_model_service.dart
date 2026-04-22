@@ -11,7 +11,7 @@ class BillDetectionResult {
   final bool isAuthentic;
   final String confidence;
   final String denomination;
-  final String currency;          // 'USD' | 'ECU' | 'UNKNOWN'
+  final String currency;
   final String details;
   final List<String> detectedKeywords;
 
@@ -26,65 +26,95 @@ class BillDetectionResult {
   });
 }
 
-/// Histograma de color: 16 bins por canal R, G, B = 48 valores normalizados
 typedef ColorHistogram = List<double>;
 
-/// Servicio de detección: OCR (denominación) + histograma vs dataset (autenticidad)
+/// Servicio de detección de 3 capas:
+///   1. OCR de palabras clave (denominación + banco)
+///   2. OCR de números impresos en el billete (las cifras "20", "100", etc.)
+///   3. Comparación de histograma con dataset de referencia
 class MLModelService {
   static final MLModelService _instance = MLModelService._internal();
   late TextRecognizer _textRecognizer;
   bool _isInitialized = false;
 
-  // Cache de histogramas de referencia por denominación
   final Map<String, List<ColorHistogram>> _referenceHistograms = {};
   bool _datasetLoaded = false;
 
   factory MLModelService() => _instance;
   MLModelService._internal();
 
-  // ── Carpetas del dataset por denominación ────────────────────────────────
+  // ── Dataset paths ────────────────────────────────────────────────────────
   static const Map<String, String> _datasetPaths = {
     '1':   'assets/datasets/billetes/USA currency/1 Dollar',
     '2':   'assets/datasets/billetes/USA currency/2 Doolar',
     '5':   'assets/datasets/billetes/USA currency/5 Dollar',
     '10':  'assets/datasets/billetes/USA currency/10 Dollar',
+    '20':  'assets/datasets/billetes/USA currency/20 Dollar',
     '50':  'assets/datasets/billetes/USA currency/50 Dollar',
     '100': 'assets/datasets/billetes/USA currency/100 Dollar',
   };
-
-  // Cuántas imágenes de referencia cargar por denominación
   static const int _samplesPerDenomination = 20;
 
-  // ── Palabras clave USD ───────────────────────────────────────────────────
+  // ── CAPA 1: Palabras clave USD ───────────────────────────────────────────
   static const Map<String, List<String>> _usdKeywords = {
-    '1':   ['ONE DOLLAR', 'ONE', 'WASHINGTON', 'IN GOD WE TRUST', 'THE UNITED STATES OF AMERICA'],
-    '2':   ['TWO DOLLARS', 'TWO', 'JEFFERSON', 'THE UNITED STATES OF AMERICA'],
-    '5':   ['FIVE DOLLARS', 'FIVE', 'LINCOLN', 'THE UNITED STATES OF AMERICA'],
-    '10':  ['TEN DOLLARS', 'TEN', 'HAMILTON', 'THE UNITED STATES OF AMERICA'],
-    '20':  ['TWENTY DOLLARS', 'TWENTY', 'JACKSON', 'THE UNITED STATES OF AMERICA'],
-    '50':  ['FIFTY DOLLARS', 'FIFTY', 'GRANT', 'THE UNITED STATES OF AMERICA'],
-    '100': ['ONE HUNDRED', 'HUNDRED DOLLARS', 'FRANKLIN', '100', 'THE UNITED STATES OF AMERICA'],
+    '1':   ['ONE DOLLAR', 'ONE', 'WASHINGTON', 'IN GOD WE TRUST',
+      'THE UNITED STATES OF AMERICA', 'FEDERAL RESERVE NOTE'],
+    '2':   ['TWO DOLLARS', 'TWO', 'JEFFERSON', 'MONTICELLO',
+      'THE UNITED STATES OF AMERICA'],
+    '5':   ['FIVE DOLLARS', 'FIVE', 'LINCOLN', 'MEMORIAL',
+      'THE UNITED STATES OF AMERICA'],
+    '10':  ['TEN DOLLARS', 'TEN', 'HAMILTON', 'TREASURY',
+      'THE UNITED STATES OF AMERICA'],
+    '20':  ['TWENTY DOLLARS', 'TWENTY', 'JACKSON', 'WHITE HOUSE',
+      'THE UNITED STATES OF AMERICA'],
+    '50':  ['FIFTY DOLLARS', 'FIFTY', 'GRANT', 'CAPITOL',
+      'THE UNITED STATES OF AMERICA'],
+    '100': ['ONE HUNDRED', 'HUNDRED DOLLARS', 'FRANKLIN', 'INDEPENDENCE HALL',
+      'THE UNITED STATES OF AMERICA', '100'],
   };
 
-  // ── Palabras clave Ecuador ───────────────────────────────────────────────
+  // ── CAPA 1: Palabras clave Ecuador ───────────────────────────────────────
   static const Map<String, List<String>> _ecuadorKeywords = {
-    '1':   ['UN DÓLAR', 'UN DOLLAR', 'BANCO CENTRAL DEL ECUADOR', 'REPÚBLICA DEL ECUADOR'],
+    '1':   ['UN DÓLAR', 'UN DOLLAR', 'BANCO CENTRAL DEL ECUADOR',
+      'REPÚBLICA DEL ECUADOR'],
     '5':   ['CINCO DÓLARES', 'CINCO DOLARES', 'BANCO CENTRAL DEL ECUADOR'],
     '10':  ['DIEZ DÓLARES', 'DIEZ DOLARES', 'BANCO CENTRAL DEL ECUADOR'],
     '20':  ['VEINTE DÓLARES', 'VEINTE DOLARES', 'BANCO CENTRAL DEL ECUADOR'],
-    '50':  ['CINCUENTA DÓLARES', 'CINCUENTA DOLARES', 'BANCO CENTRAL DEL ECUADOR'],
+    '50':  ['CINCUENTA DÓLARES', 'CINCUENTA DOLARES',
+      'BANCO CENTRAL DEL ECUADOR'],
     '100': ['CIEN DÓLARES', 'CIEN DOLARES', 'BANCO CENTRAL DEL ECUADOR'],
     '5000':  ['CINCO MIL SUCRES', 'BANCO CENTRAL DEL ECUADOR'],
     '10000': ['DIEZ MIL SUCRES', 'BANCO CENTRAL DEL ECUADOR'],
     '50000': ['CINCUENTA MIL SUCRES', 'BANCO CENTRAL DEL ECUADOR'],
   };
 
+  // ── CAPA 2: Patrones numéricos directos ──────────────────────────────────
+  // Los billetes imprimen su valor numéricamente en varias esquinas.
+  // Patrones ordenados de más específico a menos específico.
+  static const List<Map<String, dynamic>> _numericPatterns = [
+    {'pattern': r'\b100\b',   'denom': '100', 'score': 4},
+    {'pattern': r'\b50\b',    'denom': '50',  'score': 4},
+    {'pattern': r'\b20\b',    'denom': '20',  'score': 4},
+    {'pattern': r'\b10\b',    'denom': '10',  'score': 4},
+    {'pattern': r'\b5\b',     'denom': '5',   'score': 3},
+    {'pattern': r'\b2\b',     'denom': '2',   'score': 3},
+    {'pattern': r'\b1\b',     'denom': '1',   'score': 2},
+    // Con símbolo de dólar
+    {'pattern': r'\$100',     'denom': '100', 'score': 5},
+    {'pattern': r'\$50',      'denom': '50',  'score': 5},
+    {'pattern': r'\$20',      'denom': '20',  'score': 5},
+    {'pattern': r'\$10',      'denom': '10',  'score': 5},
+    {'pattern': r'\$5',       'denom': '5',   'score': 4},
+    {'pattern': r'\$2',       'denom': '2',   'score': 4},
+    {'pattern': r'\$1',       'denom': '1',   'score': 3},
+  ];
+
   // ── Indicadores genéricos de billete ────────────────────────────────────
   static const List<String> _genericBillKeywords = [
     'FEDERAL RESERVE', 'LEGAL TENDER', 'THIS NOTE IS LEGAL',
     'THE UNITED STATES', 'SECRETARY OF THE TREASURY', 'TREASURER',
-    'WASHINGTON DC', 'BANCO CENTRAL', 'REPÚBLICA DEL ECUADOR',
-    'ECUADOR', 'DOLLARS', 'DÓLARES', 'DOLARES', 'SERIES', 'NOTE',
+    'BANCO CENTRAL', 'REPÚBLICA DEL ECUADOR', 'ECUADOR',
+    'DOLLARS', 'DÓLARES', 'DOLARES', 'SERIES', 'NOTE',
   ];
 
   // ════════════════════════════════════════════════════════════════════════
@@ -96,15 +126,12 @@ class MLModelService {
     _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
     _isInitialized = true;
     print('✅ ML Kit OCR inicializado');
-
-    // Cargar histogramas del dataset en background
     _loadDatasetHistograms();
   }
 
   Future<void> _loadDatasetHistograms() async {
     if (_datasetLoaded) return;
     print('📂 Cargando histogramas del dataset...');
-
     int totalLoaded = 0;
 
     for (final entry in _datasetPaths.entries) {
@@ -120,6 +147,11 @@ class MLModelService {
             .where((a) => a.startsWith(dirPath) && _isImageFile(a))
             .toList();
 
+        if (denomAssets.isEmpty) {
+          print('  ⚠️ \$$denom: sin imágenes en $dirPath');
+          continue;
+        }
+
         denomAssets.shuffle(Random(42));
         final sample = denomAssets.take(_samplesPerDenomination).toList();
 
@@ -128,9 +160,7 @@ class MLModelService {
             final bytes   = await rootBundle.load(assetPath);
             final imgData = img.decodeImage(bytes.buffer.asUint8List());
             if (imgData == null) continue;
-
-            final histogram = _computeHistogram(imgData);
-            _referenceHistograms[denom]!.add(histogram);
+            _referenceHistograms[denom]!.add(_computeHistogram(imgData));
             totalLoaded++;
           } catch (_) {}
         }
@@ -142,95 +172,123 @@ class MLModelService {
     }
 
     _datasetLoaded = true;
-    print('📊 Dataset listo: $totalLoaded histogramas cargados');
+    print('📊 Dataset listo: $totalLoaded histogramas');
   }
 
   List<String> _parseAssetManifest(String manifestJson) {
     try {
-      final Map<String, dynamic> decoded =
-      json.decode(manifestJson) as Map<String, dynamic>;
+      final decoded = json.decode(manifestJson) as Map<String, dynamic>;
       return decoded.keys.toList();
-    } catch (e) {
-      print('⚠️ Error parseando AssetManifest: $e');
-      return [];
-    }
+    } catch (_) { return []; }
   }
 
   bool _isImageFile(String path) {
-    final lower = path.toLowerCase();
-    return lower.endsWith('.jpg') || lower.endsWith('.jpeg') ||
-        lower.endsWith('.png') || lower.endsWith('.webp');
+    final l = path.toLowerCase();
+    return l.endsWith('.jpg') || l.endsWith('.jpeg') ||
+        l.endsWith('.png') || l.endsWith('.webp');
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // DETECCIÓN PRINCIPAL
+  // DETECCIÓN PRINCIPAL (3 capas)
   // ════════════════════════════════════════════════════════════════════════
 
   Future<BillDetectionResult> detectBill(String imagePath) async {
     try {
       await initialize();
 
-      // 1 ── OCR
+      // OCR
       final inputImage = InputImage.fromFilePath(imagePath);
       final recognized = await _textRecognizer.processImage(inputImage);
       final fullText   = recognized.text.toUpperCase().trim();
 
-      print('📝 Texto OCR:\n$fullText');
-
+      print('📝 OCR:\n$fullText');
       if (fullText.isEmpty) return _noTextResult();
 
+      // ── CAPA 1: Palabras clave ───────────────────────────────────────
       final List<String> foundKeywords = [];
-      final usdMatch     = _matchCurrency(fullText, _usdKeywords, foundKeywords);
-      final ecuMatch     = _matchCurrency(fullText, _ecuadorKeywords, foundKeywords);
+      final usdMatch = _matchCurrency(fullText, _usdKeywords, foundKeywords);
+      final ecuMatch = _matchCurrency(fullText, _ecuadorKeywords, foundKeywords);
       final genericScore = _scoreGenericKeywords(fullText, foundKeywords);
 
-      // 2 ── Denominación y moneda
-      if (usdMatch != null &&
-          (ecuMatch == null || usdMatch['score']! >= ecuMatch['score']!)) {
+      // ── CAPA 2: Números impresos ─────────────────────────────────────
+      final numericResult = _detectByNumericPattern(fullText);
+      print('🔢 Detección numérica: ${numericResult?['denom']} (score ${numericResult?['score']})');
 
-        final denomKey  = usdMatch['denomination'] as String;
-        final ocrScore  = usdMatch['score'] as int;
+      // ── Fusión de capas 1 y 2 ────────────────────────────────────────
+      String? bestDenom;
+      int    bestScore = 0;
+      String bestCurrency = 'USD';
+
+      // Candidatos con sus scores combinados
+      final Map<String, int> candidates = {};
+
+      if (usdMatch != null) {
+        final d = usdMatch['denomination'] as String;
+        candidates[d] = (candidates[d] ?? 0) + (usdMatch['score'] as int) * 3;
+      }
+      if (ecuMatch != null) {
+        final d = ecuMatch['denomination'] as String;
+        candidates[d] = (candidates[d] ?? 0) + (ecuMatch['score'] as int) * 3;
+      }
+      if (numericResult != null) {
+        final d = numericResult['denom'] as String;
+        candidates[d] = (candidates[d] ?? 0) + (numericResult['score'] as int);
+      }
+
+      candidates.forEach((denom, score) {
+        if (score > bestScore) {
+          bestScore = score;
+          bestDenom = denom;
+          // Determinar moneda
+          if (ecuMatch != null && ecuMatch['denomination'] == denom &&
+              (usdMatch == null || ecuMatch['score']! > usdMatch['score']!)) {
+            bestCurrency = 'ECU';
+          } else {
+            bestCurrency = 'USD';
+          }
+        }
+      });
+
+      if (bestDenom != null && bestScore > 0) {
+        final symbol = (bestCurrency == 'ECU' && _isHistoricalSucre(bestDenom!))
+            ? 'S/.' : '\$';
+
         final authResult = await _verifyAuthenticity(
-          imagePath: imagePath, ocrText: fullText, denomKey: denomKey,
+          imagePath: imagePath,
+          ocrText:   fullText,
+          denomKey:  bestDenom!,
         );
-        final confidence = min(50 + ocrScore * 10 + authResult.datasetBonus, 98);
+
+        // Confianza: capa 1+2 + bonus dataset, cap 98%
+        final confidence = min(45 + bestScore * 5 + authResult.datasetBonus, 98);
 
         return BillDetectionResult(
-          isBill: true, isAuthentic: authResult.isAuthentic,
-          confidence: '$confidence%', denomination: '\$$denomKey',
-          currency: 'USD', details: authResult.details,
+          isBill:           true,
+          isAuthentic:      authResult.isAuthentic,
+          confidence:       '$confidence%',
+          denomination:     '$symbol$bestDenom',
+          currency:         bestCurrency,
+          details:          authResult.details,
           detectedKeywords: foundKeywords,
         );
+      }
 
-      } else if (ecuMatch != null) {
-        final denom      = ecuMatch['denomination'] as String;
-        final symbol     = _isHistoricalSucre(denom) ? 'S/.' : '\$';
-        final authResult = await _verifyAuthenticity(
-          imagePath: imagePath, ocrText: fullText, denomKey: denom,
-        );
-        final confidence = min(50 + (ecuMatch['score'] as int) * 10 + authResult.datasetBonus, 98);
-
+      // Sin denominación pero con señales de billete
+      if (genericScore > 0) {
         return BillDetectionResult(
-          isBill: true, isAuthentic: authResult.isAuthentic,
-          confidence: '$confidence%', denomination: '$symbol$denom',
-          currency: 'ECU', details: authResult.details,
-          detectedKeywords: foundKeywords,
-        );
-
-      } else if (genericScore > 0) {
-        return BillDetectionResult(
-          isBill: true,
+          isBill:      true,
           isAuthentic: _quickOCRAuthenticity(fullText, imagePath),
-          confidence: '${min(50 + genericScore * 8, 72).toInt()}%',
+          confidence:  '${min(40 + genericScore * 8, 68).toInt()}%',
           denomination: 'No identificada',
-          currency: _guessCurrencyByColor(imagePath),
-          details: 'Billete detectado pero denominación no legible. '
+          currency:    _guessCurrencyByColor(imagePath),
+          details:     'Billete detectado. No se pudo leer la denominación. '
               'Intenta con mejor iluminación.',
           detectedKeywords: foundKeywords,
         );
-      } else {
-        return _notABillResult();
       }
+
+      return _notABillResult();
+
     } catch (e) {
       print('❌ Error: $e');
       return BillDetectionResult(
@@ -242,7 +300,43 @@ class MLModelService {
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // VERIFICACIÓN DE AUTENTICIDAD: OCR + DATASET
+  // CAPA 2: Detección por patrones numéricos
+  // ════════════════════════════════════════════════════════════════════════
+
+  Map<String, dynamic>? _detectByNumericPattern(String text) {
+    // Contar cuántas veces aparece cada denominación y con qué score
+    final Map<String, int> scores = {};
+
+    for (final p in _numericPatterns) {
+      final pattern = p['pattern'] as String;
+      final denom   = p['denom']   as String;
+      final score   = p['score']   as int;
+
+      final regex   = RegExp(pattern);
+      final matches = regex.allMatches(text);
+
+      if (matches.isNotEmpty) {
+        // Bonus por múltiples apariciones (los billetes repiten su valor)
+        final bonus = min(matches.length, 4);
+        scores[denom] = (scores[denom] ?? 0) + score * bonus;
+      }
+    }
+
+    if (scores.isEmpty) return null;
+
+    // Devolver la denominación con mayor score
+    String bestDenom = scores.keys.first;
+    int    bestScore = scores.values.first;
+
+    scores.forEach((d, s) {
+      if (s > bestScore) { bestScore = s; bestDenom = d; }
+    });
+
+    return {'denom': bestDenom, 'score': bestScore};
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // CAPA 3: Verificación de autenticidad (OCR + dataset)
   // ════════════════════════════════════════════════════════════════════════
 
   Future<_AuthResult> _verifyAuthenticity({
@@ -254,7 +348,6 @@ class MLModelService {
     int datasetBonus = 0;
     String datasetDetail = '';
 
-    // ── Comparación con histogramas del dataset ──────────────────────────
     final refs = _referenceHistograms[denomKey];
 
     if (refs != null && refs.isNotEmpty) {
@@ -274,51 +367,47 @@ class MLModelService {
 
         if (maxSimilarity >= 0.80) {
           datasetBonus  = 8;
-          datasetDetail = 'Alta similitud con billetes auténticos del dataset ($simPct%).';
+          datasetDetail = 'Alta similitud con billetes auténticos ($simPct%).';
         } else if (maxSimilarity >= 0.65) {
           datasetBonus  = 5;
           datasetDetail = 'Similitud moderada con el dataset ($simPct%).';
         } else if (maxSimilarity >= 0.50) {
           datasetBonus  = 2;
-          datasetDetail = 'Similitud baja con el dataset ($simPct%). Verifica manualmente.';
+          datasetDetail = 'Similitud baja ($simPct%). Verifica manualmente.';
         } else {
-          datasetBonus  = 0;
-          datasetDetail = 'Poca similitud con billetes de referencia ($simPct%). Podría ser falso.';
+          datasetDetail = 'Poca similitud con billetes de referencia ($simPct%). '
+              'Podría ser falso o imagen de baja calidad.';
         }
       }
     } else {
-      datasetDetail = 'Dataset no disponible para esta denominación.';
+      datasetDetail = 'Sin referencias de dataset para \$$denomKey.';
     }
 
-    final totalScore  = ocrScore + datasetBonus;
-    final isAuthentic = totalScore >= 7;
+    final total    = ocrScore + datasetBonus;
+    final isAuth   = total >= 7;
 
-    print('🔒 OCR: $ocrScore | Dataset: $datasetBonus | Total: $totalScore');
+    print('🔒 OCR: $ocrScore | Dataset: $datasetBonus | Total: $total');
 
     return _AuthResult(
-      isAuthentic:  isAuthentic,
+      isAuthentic:  isAuth,
       datasetBonus: datasetBonus,
-      details: isAuthentic
+      details: isAuth
           ? '✅ Billete auténtico. $datasetDetail'
           : '⚠️ Billete sospechoso. $datasetDetail',
     );
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // HISTOGRAMA DE COLOR
+  // HISTOGRAMA
   // ════════════════════════════════════════════════════════════════════════
 
-  /// Histograma normalizado de 48 bins (16 bins × 3 canales RGB).
-  /// La imagen se escala a 64×64 para uniformidad y velocidad.
   ColorHistogram _computeHistogram(img.Image image) {
-    const bins  = 16;
-    const size  = 64;
+    const bins = 16, size = 64;
     final resized = img.copyResize(image, width: size, height: size);
 
     final rBins = List<double>.filled(bins, 0);
     final gBins = List<double>.filled(bins, 0);
     final bBins = List<double>.filled(bins, 0);
-    const totalPixels = size * size;
 
     for (int y = 0; y < size; y++) {
       for (int x = 0; x < size; x++) {
@@ -329,14 +418,14 @@ class MLModelService {
       }
     }
 
-    final histogram = <double>[];
-    for (int i = 0; i < bins; i++) histogram.add(rBins[i] / totalPixels);
-    for (int i = 0; i < bins; i++) histogram.add(gBins[i] / totalPixels);
-    for (int i = 0; i < bins; i++) histogram.add(bBins[i] / totalPixels);
-    return histogram;
+    const total = size * size;
+    return [
+      ...rBins.map((v) => v / total),
+      ...gBins.map((v) => v / total),
+      ...bBins.map((v) => v / total),
+    ];
   }
 
-  /// Similitud por intersección de histogramas → 0.0 a 1.0
   double _histogramSimilarity(ColorHistogram h1, ColorHistogram h2) {
     if (h1.length != h2.length) return 0.0;
     double intersection = 0.0, sumH1 = 0.0;
@@ -354,22 +443,25 @@ class MLModelService {
   int _scoreOCRAuthenticity(String ocrText, String imagePath) {
     int score = 0;
 
-    final serialRegex = RegExp(r'[A-Z]{1,2}\d{6,9}[A-Z]?');
-    if (serialRegex.hasMatch(ocrText)) score += 3;
+    // Número de serie (AB12345678C)
+    if (RegExp(r'[A-Z]{1,2}\d{6,9}[A-Z]?').hasMatch(ocrText)) score += 3;
 
-    final charCount = ocrText.replaceAll(RegExp(r'\s'), '').length;
-    if (charCount > 40)      score += 3;
-    else if (charCount > 20) score += 1;
+    // Cantidad de texto
+    final chars = ocrText.replaceAll(RegExp(r'\s'), '').length;
+    if (chars > 40)      score += 3;
+    else if (chars > 20) score += 1;
 
-    const securityWords = [
+    // Palabras de seguridad
+    const secWords = [
       'LEGAL TENDER', 'THIS NOTE IS LEGAL', 'IN GOD WE TRUST',
       'FEDERAL RESERVE', 'SECRETARY', 'TREASURER',
       'BANCO CENTRAL', 'REPÚBLICA',
     ];
-    for (final w in securityWords) {
+    for (final w in secWords) {
       if (ocrText.contains(w)) score += 2;
     }
 
+    // Calidad de imagen
     final file = File(imagePath);
     if (file.existsSync()) {
       final kb = file.lengthSync() / 1024;
@@ -462,7 +554,6 @@ class MLModelService {
   }
 }
 
-/// Resultado interno de autenticidad
 class _AuthResult {
   final bool   isAuthentic;
   final int    datasetBonus;
