@@ -139,7 +139,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
       final XFile capturedImage = await _cameraController.takePicture();
 
-      await _tts.speak('Analizando billete con inteligencia artificial...');
+      await _tts.speak('Analizando billete con inteligencia artificial avanzada...');
 
       final analysis = await _detectionService.analyzeBill(capturedImage.path);
 
@@ -151,18 +151,20 @@ class _CameraScreenState extends State<CameraScreen> {
           context,
           MaterialPageRoute(
             builder: (_) => ResultScreen(
-              imagePath:    capturedImage.path,
-              isAuthentic:  analysis.isAuthentic && analysis.hasBilletFeatures,
-              confidence:   analysis.confidencePercentage,
+              imagePath: capturedImage.path,
+              isAuthentic: analysis.isAuthentic && analysis.hasBilletFeatures,
+              confidence: analysis.confidencePercentage,
               denomination: analysis.denomination,
-              currency:     analysis.currency,
-              details:      analysis.details,
+              currency: analysis.currency,
+              details: analysis.details,
+              detectedFeatures: analysis.detectedFeatures,
+              suspiciousIndicators: analysis.suspiciousIndicators,
             ),
           ),
         ).then((_) {
           if (mounted) {
             setState(() {
-              _isProcessing  = false;
+              _isProcessing = false;
               _isCameraReady = true;
             });
           }
@@ -180,13 +182,13 @@ class _CameraScreenState extends State<CameraScreen> {
   }) async {
     try {
       final billRecord = BillRecord(
-        id:           const Uuid().v4(),
-        date:         DateTime.now(),
-        imagePath:    imagePath,
-        isAuthentic:  analysis.isAuthentic && analysis.hasBilletFeatures,
-        confidence:   analysis.confidencePercentage,
+        id: const Uuid().v4(),
+        date: DateTime.now(),
+        imagePath: imagePath,
+        isAuthentic: analysis.isAuthentic && analysis.hasBilletFeatures,
+        confidence: analysis.confidencePercentage,
         denomination: analysis.denomination,
-        currency:     analysis.currency,
+        currency: analysis.currency,
       );
       await _billRepository.insertBill(billRecord);
     } catch (e) {
@@ -194,12 +196,21 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  /// Método único para proporcionar feedback al usuario
   Future<void> _provideFeedback(BillAnalysis analysis) async {
     final currencyLabel = analysis.currency == 'USD'
         ? 'dólar estadounidense'
         : analysis.currency == 'ECU'
         ? 'billete ecuatoriano'
         : 'billete';
+
+    final featuresText = analysis.detectedFeatures.isEmpty
+        ? ''
+        : ' Se detectaron ${analysis.detectedFeatures.length} características positivas.';
+
+    final suspiciousText = analysis.suspiciousIndicators.isEmpty
+        ? ''
+        : ' ${analysis.suspiciousIndicators.length} indicadores sospechosos.';
 
     if (!analysis.hasBilletFeatures) {
       await _tts.speak(
@@ -210,13 +221,13 @@ class _CameraScreenState extends State<CameraScreen> {
       await _tts.speak(
         '¡Billete auténtico! '
             'Es un $currencyLabel de ${analysis.denomination}. '
-            'Confianza ${analysis.confidencePercentage}.',
+            'Confianza ${analysis.confidencePercentage}.$featuresText',
       );
     } else {
       await _tts.speak(
         'Advertencia: este $currencyLabel de ${analysis.denomination} '
             'podría ser sospechoso. '
-            'Confianza ${analysis.confidencePercentage}. '
+            'Confianza ${analysis.confidencePercentage}.$suspiciousText '
             'Verifica manualmente.',
       );
     }
@@ -349,7 +360,7 @@ class _CameraScreenState extends State<CameraScreen> {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'Analizando con IA...',
+                  'Analizando con IA avanzada...',
                   style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 14),
                 ),
               ],
@@ -532,7 +543,7 @@ class _CameraScreenState extends State<CameraScreen> {
               label: 'Reintentar',
               onActivate: () {
                 setState(() {
-                  _isInitialized     = false;
+                  _isInitialized = false;
                   _initializationError = null;
                 });
                 _initializeCamera();

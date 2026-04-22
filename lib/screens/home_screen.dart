@@ -58,7 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openGallery() async {
     if (_isProcessing) return;
 
-    // Verificar permiso de galería
     final permResult = await _permissionService.checkAndRequestPhotos();
 
     if (permResult == PermissionResult.permanentlyDenied) {
@@ -79,7 +78,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Permiso concedido — abrir galería
     try {
       await _tts.speak('Abriendo galería de fotos...');
 
@@ -98,15 +96,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final analysis = await _detectionService.analyzeBill(image.path);
 
-      // Guardar en base de datos
       final billRecord = BillRecord(
-        id:           const Uuid().v4(),
-        date:         DateTime.now(),
-        imagePath:    image.path,
-        isAuthentic:  analysis.isAuthentic && analysis.hasBilletFeatures,
-        confidence:   analysis.confidencePercentage,
+        id: const Uuid().v4(),
+        date: DateTime.now(),
+        imagePath: image.path,
+        isAuthentic: analysis.isAuthentic && analysis.hasBilletFeatures,
+        confidence: analysis.confidencePercentage,
         denomination: analysis.denomination,
-        currency:     analysis.currency,
+        currency: analysis.currency,
       );
       await _billRepository.insertBill(billRecord);
 
@@ -117,12 +114,14 @@ class _HomeScreenState extends State<HomeScreen> {
           context,
           MaterialPageRoute(
             builder: (_) => ResultScreen(
-              imagePath:    image.path,
-              isAuthentic:  analysis.isAuthentic && analysis.hasBilletFeatures,
-              confidence:   analysis.confidencePercentage,
+              imagePath: image.path,
+              isAuthentic: analysis.isAuthentic && analysis.hasBilletFeatures,
+              confidence: analysis.confidencePercentage,
               denomination: analysis.denomination,
-              currency:     analysis.currency,
-              details:      analysis.details,
+              currency: analysis.currency,
+              details: analysis.details,
+              detectedFeatures: analysis.detectedFeatures,
+              suspiciousIndicators: analysis.suspiciousIndicators,
             ),
           ),
         );
@@ -141,6 +140,14 @@ class _HomeScreenState extends State<HomeScreen> {
         ? 'billete ecuatoriano'
         : 'billete';
 
+    final featuresText = analysis.detectedFeatures.isEmpty
+        ? ''
+        : ' Se detectaron ${analysis.detectedFeatures.length} características positivas.';
+
+    final suspiciousText = analysis.suspiciousIndicators.isEmpty
+        ? ''
+        : ' ${analysis.suspiciousIndicators.length} indicadores sospechosos.';
+
     if (!analysis.hasBilletFeatures) {
       await _tts.speak(
         'No se detectó un billete en la imagen seleccionada. '
@@ -150,13 +157,13 @@ class _HomeScreenState extends State<HomeScreen> {
       await _tts.speak(
         '¡Billete auténtico! '
             'Es un $currencyLabel de ${analysis.denomination}. '
-            'Confianza ${analysis.confidencePercentage}.',
+            'Confianza ${analysis.confidencePercentage}.$featuresText',
       );
     } else {
       await _tts.speak(
         'Advertencia: este $currencyLabel de ${analysis.denomination} '
             'podría ser sospechoso. '
-            'Confianza ${analysis.confidencePercentage}. '
+            'Confianza ${analysis.confidencePercentage}.$suspiciousText '
             'Verifica manualmente.',
       );
     }
@@ -181,7 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Colors.deepPurple.shade900, Colors.deepPurple.shade500],
+            colors: [const Color(0xFF1a1a2e), const Color(0xFF16213e)],
           ),
         ),
         child: Center(
@@ -190,7 +197,6 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-
                 // Ícono principal
                 AccessibleWidget(
                   description:
@@ -204,11 +210,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Container(
                     width: 120, height: 120,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
+                      color: const Color(0xFF0f3460).withOpacity(0.8),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
-                      Icons.attach_money, size: 80, color: Colors.white,
+                      Icons.attach_money, size: 80, color: Color(0xFF00d4ff),
                     ),
                   ),
                 ),
@@ -245,7 +251,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 15,
-                      color: Colors.white.withOpacity(0.8),
+                      color: Colors.white.withOpacity(0.7),
                     ),
                   ),
                 ),
@@ -259,8 +265,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       'Abre la cámara para fotografiar y verificar un billete.',
                   label: 'Capturar Foto',
                   onActivate: _openCamera,
-                  backgroundColor: Colors.amber,
-                  textColor: Colors.black,
+                  backgroundColor: const Color(0xFF00d4ff),
+                  textColor: const Color(0xFF1a1a2e),
                   icon: Icons.camera_alt,
                   height: 70,
                   enabled: !_isProcessing,
@@ -268,15 +274,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 const SizedBox(height: 16),
 
-                // Botón 2 — Galería ← NUEVO
+                // Botón 2 — Galería
                 AccessibleButton(
                   description:
                   'Botón Seleccionar de Galería. '
                       'Elige una foto existente de tu teléfono para verificarla.',
                   label: 'Seleccionar de Galería',
                   onActivate: _openGallery,
-                  backgroundColor: Colors.deepPurple.shade300,
-                  textColor: Colors.white,
+                  backgroundColor: const Color(0xFF0f3460),
+                  textColor: const Color(0xFF00d4ff),
                   icon: Icons.photo_library,
                   height: 62,
                   enabled: !_isProcessing,
@@ -291,8 +297,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       'Muestra las verificaciones anteriores.',
                   label: 'Ver Historial',
                   onActivate: _openHistory,
-                  backgroundColor: Colors.blueAccent,
-                  textColor: Colors.white,
+                  backgroundColor: const Color(0xFF00d4ff),
+                  textColor: const Color(0xFF1a1a2e),
                   icon: Icons.history,
                   height: 60,
                   enabled: !_isProcessing,
@@ -305,13 +311,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   Column(
                     children: [
                       const CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.amber),
+                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00d4ff)),
                       ),
                       const SizedBox(height: 14),
                       Text(
                         'Analizando imagen...',
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.8),
+                          color: Colors.white.withOpacity(0.7),
                           fontSize: 14,
                         ),
                       ),

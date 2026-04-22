@@ -4,6 +4,7 @@ import '../widgets/accessible_widget.dart';
 import '../widgets/custom_app_bar.dart';
 import '../services/tts_service.dart';
 import '../services/accessibility_service.dart';
+import '../services/bill_detection_service.dart';
 
 class ResultScreen extends StatefulWidget {
   final String imagePath;
@@ -12,6 +13,8 @@ class ResultScreen extends StatefulWidget {
   final String denomination;
   final String currency;
   final String details;
+  final List<String> detectedFeatures;
+  final List<String> suspiciousIndicators;
 
   const ResultScreen({
     Key? key,
@@ -20,7 +23,9 @@ class ResultScreen extends StatefulWidget {
     required this.confidence,
     required this.denomination,
     this.currency = 'UNKNOWN',
-    this.details  = '',
+    this.details = '',
+    this.detectedFeatures = const [],
+    this.suspiciousIndicators = const [],
   }) : super(key: key);
 
   @override
@@ -67,9 +72,13 @@ class _ResultScreenState extends State<ResultScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = widget.isAuthentic
-        ? [Colors.green.shade900, Colors.green.shade500]
-        : [Colors.red.shade900,   Colors.red.shade500];
+    final bgColor = widget.isAuthentic
+        ? const Color(0xFF1a2e1a)  // Verde oscuro minimalista
+        : const Color(0xFF2e1a1a); // Rojo oscuro minimalista
+
+    final accentColor = widget.isAuthentic
+        ? const Color(0xFF00d46f)  // Verde claro
+        : const Color(0xFFff6b6b); // Rojo claro
 
     return Scaffold(
       appBar: CustomAppBar(
@@ -82,7 +91,7 @@ class _ResultScreenState extends State<ResultScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: colors,
+            colors: [bgColor, bgColor.withOpacity(0.9)],
           ),
         ),
         child: SingleChildScrollView(
@@ -91,14 +100,16 @@ class _ResultScreenState extends State<ResultScreen> {
             children: [
               const SizedBox(height: 10),
 
+              // Imagen del billete
               AccessibleWidget(
                 description: 'Imagen del billete capturado.',
                 onActivate: () => _tts.speak('Imagen del billete capturado.'),
                 child: Container(
-                  width: 220, height: 150,
+                  width: 220,
+                  height: 150,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white, width: 3),
+                    border: Border.all(color: accentColor, width: 3),
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(13),
@@ -109,6 +120,7 @@ class _ResultScreenState extends State<ResultScreen> {
 
               const SizedBox(height: 28),
 
+              // Ícono resultado
               AccessibleWidget(
                 description: widget.isAuthentic
                     ? 'Resultado: Billete AUTÉNTICO'
@@ -119,43 +131,42 @@ class _ResultScreenState extends State<ResultScreen> {
                       : 'El billete fue marcado como sospechoso. Verifica manualmente.',
                 ),
                 child: Container(
-                  width: 90, height: 90,
+                  width: 90,
+                  height: 90,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
+                    color: accentColor.withOpacity(0.2),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
-                    widget.isAuthentic
-                        ? Icons.check_circle
-                        : Icons.warning_amber_rounded,
+                    widget.isAuthentic ? Icons.check_circle : Icons.warning_amber_rounded,
                     size: 65,
-                    color: Colors.white,
+                    color: accentColor,
                   ),
                 ),
               ),
 
               const SizedBox(height: 16),
 
+              // Estado
               AccessibleWidget(
                 description: widget.isAuthentic ? 'Estado: AUTÉNTICO' : 'Estado: SOSPECHOSO',
                 onActivate: () => _tts.speak(widget.isAuthentic ? 'Auténtico' : 'Sospechoso'),
                 child: Text(
-                  widget.isAuthentic ? '¡AUTÉNTICO!' : '¡SOSPECHOSO!',
-                  style: const TextStyle(
-                    fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white,
+                  widget.isAuthentic ? '✅ AUTÉNTICO' : '⚠️ SOSPECHOSO',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: accentColor,
                   ),
                 ),
               ),
 
               const SizedBox(height: 20),
 
+              // Tarjeta de detalles
               AccessibleWidget(
                 description:
-                'Detalles del billete: '
-                    'Denominación ${widget.denomination}. '
-                    'Moneda $_currencyLabel. '
-                    'Confianza ${widget.confidence}. '
-                    '${widget.details}',
+                'Detalles del billete: Denominación ${widget.denomination}. Moneda $_currencyLabel. Confianza ${widget.confidence}.',
                 onActivate: () => _tts.speak(
                   'Detalles del billete: '
                       'Denominación ${widget.denomination}. '
@@ -164,7 +175,7 @@ class _ResultScreenState extends State<ResultScreen> {
                       '${widget.details}',
                 ),
                 child: Card(
-                  color: Colors.white.withOpacity(0.15),
+                  color: Colors.white.withOpacity(0.08),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   child: Padding(
                     padding: const EdgeInsets.all(20),
@@ -180,15 +191,15 @@ class _ResultScreenState extends State<ResultScreen> {
                           'Estado',
                           widget.isAuthentic ? 'Auténtico ✅' : 'Sospechoso ⚠️',
                         ),
-                        if (widget.details.isNotEmpty) ...[
+                        if (widget.detectedFeatures.isNotEmpty) ...[
                           const Divider(color: Colors.white24, height: 24),
-                          Text(
-                            widget.details,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.75), fontSize: 12,
-                            ),
-                          ),
+                          _buildFeaturesList('Características Positivas', widget.detectedFeatures,
+                              const Color(0xFF00d46f)),
+                        ],
+                        if (widget.suspiciousIndicators.isNotEmpty) ...[
+                          const Divider(color: Colors.white24, height: 24),
+                          _buildFeaturesList('⚠️ Indicadores Sospechosos',
+                              widget.suspiciousIndicators, const Color(0xFFff6b6b)),
                         ],
                       ],
                     ),
@@ -202,8 +213,8 @@ class _ResultScreenState extends State<ResultScreen> {
                 description: 'Botón verificar otro billete. Vuelve a la pantalla de cámara.',
                 label: 'Verificar Otro',
                 onActivate: () => Navigator.pop(context),
-                backgroundColor: Colors.amber,
-                textColor: Colors.black,
+                backgroundColor: accentColor,
+                textColor: bgColor,
                 icon: Icons.repeat,
                 height: 62,
               ),
@@ -214,8 +225,8 @@ class _ResultScreenState extends State<ResultScreen> {
                 description: 'Botón volver al inicio. Regresa a la pantalla principal.',
                 label: 'Volver al Inicio',
                 onActivate: () => Navigator.popUntil(context, (route) => route.isFirst),
-                backgroundColor: Colors.blueAccent,
-                textColor: Colors.white,
+                backgroundColor: const Color(0xFF0f3460),
+                textColor: const Color(0xFF00d4ff),
                 height: 62,
               ),
 
@@ -231,8 +242,30 @@ class _ResultScreenState extends State<ResultScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: TextStyle(fontSize: 15, color: Colors.white.withOpacity(0.8))),
-        Text(value, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+        Text(label,
+            style: TextStyle(fontSize: 15, color: Colors.white.withOpacity(0.7))),
+        Text(value,
+            style: const TextStyle(
+                fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+      ],
+    );
+  }
+
+  Widget _buildFeaturesList(String title, List<String> items, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title,
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.bold, color: color)),
+        const SizedBox(height: 8),
+        ...items.map((item) => Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 4),
+          child: Text(
+            '• $item',
+            style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.85)),
+          ),
+        )),
       ],
     );
   }
