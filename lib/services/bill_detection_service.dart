@@ -5,6 +5,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'ml_model_service.dart';
 import 'enhanced_denomination_detector.dart';
 import 'image_enhancement_service.dart';
+import 'dataset_service.dart';
 
 class BillAnalysis {
   final bool hasBilletFeatures;
@@ -44,8 +45,10 @@ class BillDetectionService {
   static final BillDetectionService _instance = BillDetectionService._internal();
   late MLModelService _mlService;
   late EnhancedDenominationDetector _denomDetector;
+  late DatasetService _datasetService;
   late TextRecognizer _textRecognizer;
   bool _authInitialized = false;
+  bool _datasetInitialized = false;
 
   factory BillDetectionService() => _instance;
 
@@ -53,6 +56,19 @@ class BillDetectionService {
     _mlService = MLModelService();
     _mlService.initialize();
     _denomDetector = EnhancedDenominationDetector();
+    _datasetService = DatasetService();
+    _initDataset();
+  }
+
+  Future<void> _initDataset() async {
+    if (_datasetInitialized) return;
+    try {
+      await _datasetService.initializeExtendedDataset();
+      _datasetInitialized = true;
+      print('✅ DatasetService inicializado');
+    } catch (e) {
+      print('⚠️ Error inicializando DatasetService: $e');
+    }
   }
 
   /// Analiza un billete usando OCR + autenticación mejorada
@@ -221,13 +237,26 @@ class BillDetectionService {
       detectedFeatures.addAll(feat5);
       suspiciousIndicators.addAll(susp5);
 
+      // DETECTOR 6: Comparación con Dataset de firmas de referencia
+      print('  Detector 6: Dataset de firmas...');
+      final (datasetScore, feat6, susp6) = await _compareWithDataset(
+        imagePath: imagePath,
+        denomination: denomination,
+        currency: currency,
+        image: image,
+      );
+      detectorScores['dataset'] = datasetScore;
+      detectedFeatures.addAll(feat6);
+      suspiciousIndicators.addAll(susp6);
+
       // SCORING BAYESIANO PONDERADO
       final weights = {
-        'security': 0.30,
-        'texture': 0.20,
-        'perspective': 0.15,
-        'histogram': 0.20,
-        'ocr': 0.15,
+        'security':    0.25,
+        'texture':     0.15,
+        'perspective': 0.10,
+        'histogram':   0.15,
+        'ocr':         0.15,
+        'dataset':     0.20,
       };
 
       double weightedScore = 0.0;
@@ -945,6 +974,78 @@ class BillDetectionService {
     }
 
     return buffer.toString();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // DETECTOR 6: Comparación con Dataset de Firmas
+  // ═══════════════════════════════════════════════════════════════
+
+  Future<(double, List<String>, List<String>)> _compareWithDataset({
+    required String imagePath,
+    required String denomination,
+    required String currency,
+    required img.Image image,
+  }) async {
+    final features   = <String>[];
+    final suspicious = <String>[];
+    double score     = 0.0;
+
+    try {
+      if (!_datasetInitialized) await _initDataset();
+
+      final matchResult = await _datasetService.matchAgainstLibrary(
+        imagePath, currency,
+      );
+
+      final topScore = matchResult.topMatchScore;
+      final topDenom = matchResult.topMatch;
+
+      print('    Dataset top match: \$$topDenom (${(topScore * 100).toStringAsFixed(1)}%)');
+
+      final denomKey = denomination.replaceAll(r'$', '').replaceAll('S/.', '').trim();
+      final denomMatches = topDenom == denomKey;
+
+      if (topScore >= 0.75) {
+        score = topScore;
+        features.add('Alta similitud con firma de referencia \$$topDenom (${(topScore * 100).toStringAsFixed(0)}%)');
+        if (denomMatches) {
+          features.add('Denominación confirmada por dataset');
+          score = min(score + 0.05, 1.0);
+        }
+      } else if (topScore >= 0.55) {
+        score = topScore;
+        features.add('Similitud moderada con firma \$$topDenom (${(topScore * 100).toStringAsFixed(0)}%)');
+        if (!denomMatches) {
+          suspicious.add('Denominación no coincide con el mejor match del dataset');
+          score *= 0.85;
+        }
+      } else {
+        score = topScore * 0.5;
+        suspicious.add('Baja similitud con firmas de referencia (${(topScore * 100).toStringAsFixed(0)}%)');
+      }
+
+      // Verificar gap entre 1er y 2do match
+      final allMatches = matchResult.allMatches;
+      final sortedMatches = allMatches.entries.toList()
+        ..sort((a, b) => b.value[0].compareTo(a.value[0]));
+
+      if (sortedMatches.length >= 2) {
+        final gap = topScore - sortedMatches[1].value[0];
+        if (gap > 0.15) {
+          features.add('Match inequívoco (diferencia ${(gap * 100).toStringAsFixed(0)}% sobre 2do lugar)');
+          score = min(score + 0.05, 1.0);
+        } else if (gap < 0.05) {
+          suspicious.add('Ambigüedad entre denominaciones detectada');
+          score *= 0.90;
+        }
+      }
+
+      print('    Dataset score final: ${(score * 100).toStringAsFixed(1)}%');
+      return (score.clamp(0.0, 1.0), features, suspicious);
+    } catch (e) {
+      print('⚠️ Error en _compareWithDataset: $e');
+      return (0.0, features, suspicious);
+    }
   }
 
   void dispose() {
