@@ -4,7 +4,6 @@ import 'package:image/image.dart' as img;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'ml_model_service.dart';
 import 'enhanced_denomination_detector.dart';
-import 'ocr_optimizer_service.dart';
 
 class BillAnalysis {
   final bool hasBilletFeatures;
@@ -58,140 +57,66 @@ class BillDetectionService {
   /// Analiza un billete usando OCR + autenticación mejorada
   Future<BillAnalysis> analyzeBill(String imagePath) async {
     try {
-      print('🔍 ════════════════════════════════════════════════');
-      print('🔍 INICIANDO ANÁLISIS DE BILLETE');
-      print('🔍 Archivo: $imagePath');
-      print('🔍 ════════════════════════════════════════════════\n');
+      print('🔍 Iniciando análisis de billete...');
 
-      // 1. Verificar que archivo existe
+      // 1. Leer imagen
       final imageFile = File(imagePath);
-      if (!imageFile.existsSync()) {
-        throw Exception('Archivo no existe: $imagePath');
-      }
-      print('✅ Archivo encontrado\n');
-
-      // 2. Decodificar imagen
       final imageBytes = await imageFile.readAsBytes();
       final image = img.decodeImage(imageBytes);
 
       if (image == null) {
         throw Exception('No se pudo decodificar la imagen');
       }
-      print('✅ Imagen decodificada: ${image.width}x${image.height}\n');
 
-      // 3. Detectar moneda por color
+      // 2. Detectar moneda por color
       final currency = _guessCurrencyByColor(image);
-      print('💱 Moneda detectada: $currency\n');
+      print('💱 Moneda detectada: $currency');
 
-      // 4. OCR MEJORADO (para debug)
-      print('📝 ═══════════════════════════════════════════════');
-      print('📝 INICIANDO OCR OPTIMIZADO');
-      print('📝 ═══════════════════════════════════════════════\n');
-
-      final ocrOptimizer = OCROptimizerService();
-      final optimizedOCR = await ocrOptimizer.optimizeAndRecognize(imagePath);
-      final fullText = optimizedOCR.text;
-
-      print('📄 TEXTO OCR OPTIMIZADO (${optimizedOCR.bestAngle}):');
-      print('─────────────────────────────────────────────────');
-      print(fullText.isNotEmpty ? fullText : '(vacío)');
-      print('─────────────────────────────────────────────────\n');
-
-      print('📊 ESTADÍSTICAS OCR:');
-      print('   • Longitud: ${fullText.length} caracteres');
-      print('   • Calidad: ${(optimizedOCR.quality * 100).toStringAsFixed(1)}%');
-      print('   • Mejor ángulo: ${optimizedOCR.bestAngle}');
-      print('   • Todas las orientaciones:');
-      for (final entry in optimizedOCR.allResults.entries) {
-        print('     ${entry.key}: ${(entry.value * 100).toStringAsFixed(1)}%');
-      }
-      print('');
-
-      // 5. Usar nuevo detector de denominación
-      print('🔢 Detectando denominación...\n');
+      // 3. Usar nuevo detector de denominación
+      print('🔢 Detectando denominación...');
       final denomResult = await _denomDetector.detectDenomination(
         imagePath,
         currency,
       );
 
-      print('\n✅ Denominación: ${denomResult.denomination}');
-      print('   Confianza: ${(denomResult.confidence * 100).toStringAsFixed(1)}%\n');
+      print('✅ Denominación: ${denomResult.denomination} (${(denomResult.confidence * 100).toStringAsFixed(1)}%)');
+      print(denomResult.reasoning);
 
-      // 6. Análisis de autenticidad
-      if (denomResult.confidence > 0.3) {
-        print('🔐 Iniciando análisis de autenticidad...\n');
+      // 4. Análisis básico de características
+      final result = await _mlService.detectBill(imagePath);
 
-        final result = await _mlService.detectBill(imagePath);
-
-        if (result.isBill) {
-          final advancedAnalysis = await _performAdvancedAuthentication(
-            imagePath: imagePath,
-            basicResult: result,
-            denomination: denomResult.denomination,
-            currency: currency,
-          );
-          return advancedAnalysis;
-        }
-
-        return BillAnalysis(
-          hasBilletFeatures: result.isBill,
-          isAuthentic: result.isAuthentic,
-          confidence: denomResult.confidence,
+      // 5. Análisis avanzado de autenticidad
+      if (result.isBill) {
+        final advancedAnalysis = await _performAdvancedAuthentication(
+          imagePath: imagePath,
+          basicResult: result,
           denomination: denomResult.denomination,
           currency: currency,
-          details: denomResult.reasoning,
-          detectedKeywords: result.detectedKeywords,
         );
+        return advancedAnalysis;
       }
 
-      // Sin denominación
+      // Si no es billete
       return BillAnalysis(
-        hasBilletFeatures: false,
-        isAuthentic: false,
-        confidence: 0.0,
-        denomination: 'No detectada',
+        hasBilletFeatures: result.isBill,
+        isAuthentic: result.isAuthentic,
+        confidence: denomResult.confidence,
+        denomination: denomResult.denomination,
         currency: currency,
-        details: 'No se pudo identificar la denominación del billete.\n\nAsegúrate de:\n✓ Tomar foto en luz natural\n✓ Billete completamente visible\n✓ Ángulo frontal\n✓ Foto clara y enfocada',
+        details: denomResult.reasoning,
+        detectedKeywords: result.detectedKeywords,
       );
     } catch (e) {
-      print('❌ ERROR: $e\n');
+      print('❌ Error en BillDetectionService: $e');
       return BillAnalysis(
         hasBilletFeatures: false,
         isAuthentic: false,
         confidence: 0.0,
         denomination: 'Error',
         currency: 'UNKNOWN',
-        details: 'Error: $e',
+        details: 'Error al procesar la imagen: $e',
       );
     }
-  }
-
-  TextRecognizer _getTextRecognizer() {
-    if (!_authInitialized) {
-      _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
-      _authInitialized = true;
-    }
-    return _textRecognizer;
-  }
-
-  double _calculateOCRConfidence(RecognizedText recognized) {
-    if (recognized.blocks.isEmpty) return 0.0;
-
-    double totalConfidence = 0.0;
-    int elementCount = 0;
-
-    for (final block in recognized.blocks) {
-      for (final line in block.lines) {
-        for (final element in line.elements) {
-          final conf = element.confidence ?? 0.0;
-          totalConfidence += conf;
-          elementCount++;
-        }
-      }
-    }
-
-    if (elementCount == 0) return 0.0;
-    return (totalConfidence / elementCount).clamp(0.0, 1.0);
   }
 
   /// Detecta moneda por color dominante
