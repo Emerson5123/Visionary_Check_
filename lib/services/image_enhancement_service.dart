@@ -32,16 +32,37 @@ class ImageEnhancementService {
     final p5 = sorted[(sorted.length * 0.05).toInt()];
     final p95 = sorted[(sorted.length * 0.95).toInt()];
 
+    // Calcular media robusta de forma eficiente (un solo paso)
+    int sum = 0;
+    int count = 0;
+    for (var v in gray) {
+      if (v >= p5 && v <= p95) {
+        sum += v;
+        count++;
+      }
+    }
 
+    final robustMean = count > 0 ? sum ~/ count : 128;
     final targetMean = 128;
     final adjustment = targetMean - robustMean;
 
     print('🔆 Normalización: media=$robustMean, ajuste=$adjustment');
 
     final result = img.Image.from(image);
+
     for (int y = 0; y < image.height; y++) {
       for (int x = 0; x < image.width; x++) {
         final px = image.getPixel(x, y);
+
+        // Aplicar el ajuste y asegurar el rango 0-255
+        // Nota: px.r, px.g, px.b ya suelen ser numéricos
+        final r = (px.r + adjustment).clamp(0, 255).toInt();
+        final g = (px.g + adjustment).clamp(0, 255).toInt();
+        final b = (px.b + adjustment).clamp(0, 255).toInt();
+        final a = px.a.toInt();
+
+        // CORRECCIÓN AQUÍ: Se pasan los canales por separado, no como img.Pixel
+        result.setPixelRgba(x, y, r, g, b, a);
       }
     }
     return result;
