@@ -4,6 +4,7 @@ import 'package:image/image.dart' as img;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'ml_model_service.dart';
 import 'enhanced_denomination_detector.dart';
+import 'image_enhancement_service.dart';
 
 class BillAnalysis {
   final bool hasBilletFeatures;
@@ -458,11 +459,21 @@ class BillDetectionService {
     gray.sort();
 
     final mean = gray.reduce((a, b) => a + b) ~/ gray.length;
-    final min = gray.first;
-    final max = gray.last;
+    final p5 = gray[(gray.length * 0.05).toInt()];
+    final p95 = gray[(gray.length * 0.95).toInt()];
+    final contrast = p95 - p5;
 
-    final brightOk = mean >= 80 && mean <= 180;
-    final contrastOk = (max - min) > 80;
+    // ✨ Rangos adaptativos: más tolerantes con baja calidad
+    final brightOk = mean >= 50 && mean <= 200;
+    final contrastOk = contrast > 40;
+
+    // Log para debug
+    if (mean < 80 || mean > 180) {
+      print('⚠️ Brillo subóptimo ($mean), pero imagen procesable');
+    }
+    if (contrast < 80) {
+      print('⚠️ Contraste bajo ($contrast), pero aceptable');
+    }
 
     return (brightOk, contrastOk);
   }
@@ -653,24 +664,43 @@ class BillDetectionService {
     double score = 0.0;
 
     try {
+      final gray = _toGrayscale(image);
+      final mean = gray.reduce((a, b) => a + b) ~/ gray.length;
+
+      // ✨ NUEVO: Detectar condiciones de iluminación
+      final isVeryDark = mean < 80;
+      final isVeryBright = mean > 180;
+
+      print('📊 Análisis de histograma: media=$mean, oscuro=$isVeryDark, claro=$isVeryBright');
+
       final rgbHist = _computeRGBHistogram(image);
       final rgbScore = _scoreRGBHistogram(rgbHist, currency);
-      score += rgbScore * 0.5;
 
-      if (rgbScore > 0.7) {
-        features.add('Distribución RGB dentro de rangos esperados');
+      // ✨ NUEVO: Pesos adaptativos según iluminación
+      if (isVeryDark || isVeryBright) {
+        score += rgbScore * 0.3;  // Reducir peso en malas condiciones
+        features.add('Histograma RGB detectado (condiciones de luz subóptimas)');
       } else {
-        suspicious.add('Distribución RGB atípica');
+        score += rgbScore * 0.5;  // Peso normal
+        features.add('Distribución RGB dentro de rangos esperados');
       }
 
       final hsvHist = _computeHSVHistogram(image);
       final hsvScore = _scoreHSVHistogram(hsvHist, currency);
-      score += hsvScore * 0.5;
 
-      if (hsvScore > 0.7) {
-        features.add('Distribución HSV característica');
+      if (isVeryDark || isVeryBright) {
+        score += hsvScore * 0.3;
+        features.add('Histograma HSV detectado (luz variable)');
       } else {
-        suspicious.add('Saturación de color anómala');
+        score += hsvScore * 0.5;
+        features.add('Distribución HSV característica');
+      }
+
+      // ✨ NUEVO: Alertas informativas (no rechazo automático)
+      if (mean < 60) {
+        suspicious.add('⚠️ Imagen muy oscura - considera usar luz o flash');
+      } else if (mean > 200) {
+        suspicious.add('⚠️ Imagen sobreexpuesta - evita luz directa del sol');
       }
 
       return (min(score, 1.0), features, suspicious);
@@ -765,15 +795,58 @@ class BillDetectionService {
         _authInitialized = true;
       }
 
+      // ✨ NUEVO: Intentar OCR normal primero
+      String text = '';
       final inputImage = InputImage.fromFilePath(imagePath);
-      final recognizedText = await _textRecognizer.processImage(inputImage);
-      final text = recognizedText.text.toUpperCase();
+      var recognizedText = await _textRecognizer.processImage(inputImage);
+      text = recognizedText.text.toUpperCase();
+
+      // ✨ NUEVO: Si OCR falla o es muy corto, mejorar imagen y reintentar
+      if (text.isEmpty || text.length < 20) {
+        print('🔧 OCR insuficiente (${text.length} caracteres), aplicando mejoras...');
+
+        try {
+          final imageFile = File(imagePath);
+          final imageBytes = await imageFile.readAsBytes();
+          final originalImage = img.decodeImage(imageBytes);
+
+          if (originalImage != null) {
+            // ✨ Usar ImageEnhancementService para procesar
+            print('📸 Aplicando mejoras: normalización, CLAHE, denoising, sharpen...');
+            final enhancedImage = ImageEnhancementService.enhanceForAnalysis(originalImage);
+
+            // Guardar imagen temporal mejorada
+            final timestamp = DateTime.now().millisecondsSinceEpoch;
+            final tempPath = '${imageFile.parent.path}/enhanced_$timestamp.jpg';
+            final tempFile = File(tempPath);
+            await tempFile.writeAsBytes(img.encodeJpg(enhancedImage));
+
+            // Reintentar OCR con imagen mejorada
+            print('🔄 Reintentando OCR con imagen mejorada...');
+            final enhancedInputImage = InputImage.fromFilePath(tempPath);
+            recognizedText = await _textRecognizer.processImage(enhancedInputImage);
+            text = recognizedText.text.toUpperCase();
+
+            // Limpiar archivo temporal
+            try { await tempFile.delete(); } catch (_) {}
+
+            if (text.isNotEmpty && text.length > 10) {
+              print('✅ OCR exitoso después de mejoras (${text.length} caracteres)');
+              features.add('Texto legible con procesamiento de imagen');
+              score += 0.10;
+            }
+          }
+        } catch (e) {
+          print('⚠️ Error al procesar imagen: $e');
+        }
+      }
 
       if (text.isEmpty) {
         suspicious.add('No se pudo leer texto (posible baja calidad)');
         return (0.0, features, suspicious);
       }
 
+      // ✨ Resto del código igual
       final securityKeywords = currency == 'USD'
           ? [
         'FEDERAL RESERVE NOTE',

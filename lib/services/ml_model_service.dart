@@ -344,7 +344,7 @@ class MLModelService {
     required String ocrText,
     required String denomKey,
   }) async {
-    final ocrScore   = _scoreOCRAuthenticity(ocrText, imagePath);
+    final ocrScore = _scoreOCRAuthenticity(ocrText, imagePath);
     int datasetBonus = 0;
     String datasetDetail = '';
 
@@ -354,6 +354,10 @@ class MLModelService {
       final capturedImage = img.decodeImage(File(imagePath).readAsBytesSync());
 
       if (capturedImage != null) {
+        // ✨ NUEVO: Evaluar calidad de imagen
+        final imageQuality = _assessImageQuality(capturedImage);
+        print('📸 Calidad de imagen: ${(imageQuality * 100).toStringAsFixed(1)}%');
+
         final capturedHist = _computeHistogram(capturedImage);
 
         double maxSimilarity = 0.0;
@@ -365,36 +369,122 @@ class MLModelService {
         final simPct = (maxSimilarity * 100).toStringAsFixed(1);
         print('📊 Similitud dataset \$$denomKey: $simPct%');
 
-        if (maxSimilarity >= 0.80) {
-          datasetBonus  = 8;
-          datasetDetail = 'Alta similitud con billetes auténticos ($simPct%).';
-        } else if (maxSimilarity >= 0.65) {
-          datasetBonus  = 5;
-          datasetDetail = 'Similitud moderada con el dataset ($simPct%).';
-        } else if (maxSimilarity >= 0.50) {
-          datasetBonus  = 2;
-          datasetDetail = 'Similitud baja ($simPct%). Verifica manualmente.';
+        // ✨ NUEVO: Umbrales dinámicos según calidad
+        if (imageQuality > 0.8) {
+          // Imagen de buena calidad: umbrales estrictos
+          if (maxSimilarity >= 0.80) {
+            datasetBonus = 8;
+            datasetDetail = 'Alta similitud con billetes auténticos ($simPct%).';
+          } else if (maxSimilarity >= 0.65) {
+            datasetBonus = 5;
+            datasetDetail = 'Similitud moderada con el dataset ($simPct%).';
+          } else if (maxSimilarity >= 0.50) {
+            datasetBonus = 2;
+            datasetDetail = 'Similitud baja ($simPct%). Verifica manualmente.';
+          }
+        } else if (imageQuality > 0.5) {
+          // Imagen de calidad media: umbrales permisivos
+          if (maxSimilarity >= 0.65) {
+            datasetBonus = 7;
+            datasetDetail = 'Similitud buena a pesar de calidad de imagen moderada ($simPct%).';
+          } else if (maxSimilarity >= 0.50) {
+            datasetBonus = 4;
+            datasetDetail = 'Similitud aceptable ($simPct%).';
+          } else if (maxSimilarity >= 0.40) {
+            datasetBonus = 1;
+            datasetDetail = 'Similitud limitada ($simPct%). Mejora iluminación.';
+          }
         } else {
-          datasetDetail = 'Poca similitud con billetes de referencia ($simPct%). '
-              'Podría ser falso o imagen de baja calidad.';
+          // Imagen de baja calidad: solo bonus si hay similitud clara
+          if (maxSimilarity >= 0.50) {
+            datasetBonus = 3;
+            datasetDetail = 'Similitud detectada ($simPct%) en imagen de baja calidad.';
+          } else {
+            datasetDetail = 'Poca similitud ($simPct%). Foto de muy baja calidad.';
+          }
         }
       }
     } else {
       datasetDetail = 'Sin referencias de dataset para \$$denomKey.';
     }
 
-    final total    = ocrScore + datasetBonus;
-    final isAuth   = total >= 7;
+    final total = ocrScore + datasetBonus;
+    final isAuth = total >= 7;
 
-    print('🔒 OCR: $ocrScore | Dataset: $datasetBonus | Total: $total');
+    print('🔒 OCR: $ocrScore | Dataset: $datasetBonus | Total: $total | Auth: $isAuth');
 
     return _AuthResult(
-      isAuthentic:  isAuth,
+      isAuthentic: isAuth,
       datasetBonus: datasetBonus,
       details: isAuth
           ? '✅ Billete auténtico. $datasetDetail'
           : '⚠️ Billete sospechoso. $datasetDetail',
     );
+  }
+
+// ✨ NUEVO: Evaluar calidad de imagen
+  double _assessImageQuality(img.Image image) {
+    final gray = _toGrayscale(image);
+
+    // Factor 1: Brillo (30% peso)
+    final mean = gray.reduce((a, b) => a + b) ~/ gray.length;
+    final brightScore =
+    (mean >= 80 && mean <= 180) ? 1.0 :
+    (mean < 40 || mean > 220 ? 0.2 : 0.6);
+
+    // Factor 2: Contraste (30% peso)
+    gray.sort();
+    final contrast = gray.last - gray.first;
+    final contrastScore =
+    (contrast > 100) ? 1.0 :
+    (contrast < 40 ? 0.3 : 0.7);
+
+    // Factor 3: Nitidez (40% peso)
+    final sharpnessScore = _computeSharpness(image);
+
+    final quality = brightScore * 0.3 + contrastScore * 0.3 + sharpnessScore * 0.4;
+    print('  - Brillo: ${(brightScore * 100).toStringAsFixed(0)}%');
+    print('  - Contraste: ${(contrastScore * 100).toStringAsFixed(0)}%');
+    print('  - Nitidez: ${(sharpnessScore * 100).toStringAsFixed(0)}%');
+
+    return quality;
+  }
+
+// ✨ NUEVO: Calcular nitidez usando Laplaciano
+  double _computeSharpness(img.Image image) {
+    const kernel = [[0, -1, 0], [-1, 4, -1], [0, -1, 0]];
+    final gray = _toGrayscale(image);
+
+    int sharpPixels = 0;
+    for (int y = 1; y < image.height - 1; y++) {
+      for (int x = 1; x < image.width - 1; x++) {
+        double sum = 0;
+        for (int ky = 0; ky < 3; ky++) {
+          for (int kx = 0; kx < 3; kx++) {
+            final idx = (y - 1 + ky) * image.width + (x - 1 + kx);
+            if (idx >= 0 && idx < gray.length) {
+              sum += kernel[ky][kx] * gray[idx];
+            }
+          }
+        }
+        if (sum.abs() > 100) sharpPixels++;
+      }
+    }
+
+    return (sharpPixels / (image.width * image.height)).clamp(0.0, 1.0);
+  }
+
+// ✨ NUEVO: Helper para escala de grises
+  List<int> _toGrayscale(img.Image image) {
+    final result = <int>[];
+    for (int y = 0; y < image.height; y++) {
+      for (int x = 0; x < image.width; x++) {
+        final px = image.getPixel(x, y);
+        final gray = (0.299 * px.r + 0.587 * px.g + 0.114 * px.b).toInt();
+        result.add(gray.clamp(0, 255));
+      }
+    }
+    return result;
   }
 
   // ════════════════════════════════════════════════════════════════════════
