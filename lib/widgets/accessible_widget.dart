@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import '../services/accessibility_service.dart';
+import '../theme/app_theme.dart';
 
 /// 1 toque  → enfoca y anuncia por TTS
 /// 2 toques → ejecuta [onActivate]
-/// Muestra borde ámbar cuando está enfocado.
+/// Foco visible con borde teal (colores BilletesMx)
 class AccessibleWidget extends StatefulWidget {
   final String description;
   final VoidCallback? onActivate;
@@ -79,12 +80,13 @@ class _AccessibleWidgetState extends State<AccessibleWidget> {
         duration: const Duration(milliseconds: 150),
         decoration: _isFocused
             ? BoxDecoration(
-          border: Border.all(color: Colors.amber, width: 3),
+          border: Border.all(color: AppTheme.warning, width: 2.5),
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: Colors.amber.withOpacity(0.4),
-              blurRadius: 12, spreadRadius: 2,
+              color: AppTheme.warning.withOpacity(0.35),
+              blurRadius: 10,
+              spreadRadius: 2,
             ),
           ],
         )
@@ -95,13 +97,13 @@ class _AccessibleWidgetState extends State<AccessibleWidget> {
   }
 }
 
-/// Botón accesible listo para usar
+/// Botón accesible con estilo BilletesMx
 class AccessibleButton extends StatelessWidget {
   final String description;
   final String label;
   final VoidCallback? onActivate;
-  final Color backgroundColor;
-  final Color textColor;
+  final Color? backgroundColor;
+  final Color? textColor;
   final IconData? icon;
   final double height;
   final bool enabled;
@@ -111,15 +113,18 @@ class AccessibleButton extends StatelessWidget {
     required this.description,
     required this.label,
     this.onActivate,
-    this.backgroundColor = Colors.deepPurple,
-    this.textColor = Colors.white,
+    this.backgroundColor,
+    this.textColor,
     this.icon,
-    this.height = 65,
+    this.height = 56,
     this.enabled = true,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    final bgColor = backgroundColor ?? AppTheme.primary;
+    final fgColor = textColor ?? AppTheme.textOnPrimary;
+
     return AccessibleWidget(
       description: description,
       onActivate: onActivate,
@@ -130,20 +135,30 @@ class AccessibleButton extends StatelessWidget {
         child: ElevatedButton(
           onPressed: null,
           style: ElevatedButton.styleFrom(
-            backgroundColor: enabled ? backgroundColor : Colors.grey.shade700,
-            disabledBackgroundColor: enabled ? backgroundColor : Colors.grey.shade700,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            backgroundColor: enabled ? bgColor : AppTheme.divider,
+            disabledBackgroundColor: enabled ? bgColor : AppTheme.divider,
+            elevation: enabled ? 2 : 0,
+            shadowColor: bgColor.withOpacity(0.3),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (icon != null) ...[
-                Icon(icon, color: textColor, size: 28),
-                const SizedBox(width: 12),
+                Icon(icon, color: fgColor, size: 22),
+                const SizedBox(width: 10),
               ],
-              Text(label,
-                  style: TextStyle(
-                      color: textColor, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(
+                label,
+                style: TextStyle(
+                  color: fgColor,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+              ),
             ],
           ),
         ),

@@ -3,13 +3,13 @@ import 'screens/home_screen.dart';
 import 'services/database_service.dart';
 import 'services/preferences_service.dart';
 import 'services/tts_service.dart';
+import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   print('🚀 Inicializando Visionary Check...');
 
-  // 1. Inicializar base de datos
   final dbService = DatabaseService();
   try {
     await dbService.database;
@@ -18,19 +18,14 @@ void main() async {
     print('❌ Error BD: $e');
   }
 
-  // 2. Cargar preferencias guardadas y aplicarlas al TTS
   try {
     final saved = await PreferencesService().loadAll();
     final tts   = TTSService();
-
     await tts.setVoiceEnabled(saved.voiceEnabled);
     await tts.setVolume(saved.volume);
     await tts.setSpeechRate(saved.speechRate);
     await tts.setLanguage(saved.language);
-
-    print('✅ Preferencias cargadas — voz: ${saved.voiceEnabled}, '
-        'volumen: ${saved.volume}, velocidad: ${saved.speechRate}, '
-        'idioma: ${saved.language}');
+    print('✅ Preferencias cargadas');
   } catch (e) {
     print('❌ Error cargando preferencias: $e');
   }
@@ -46,11 +41,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Visionary Cash Check',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        primarySwatch: Colors.deepPurple,
-        brightness: Brightness.dark,
-      ),
+      theme: AppTheme.theme,
       home: const HomeScreen(),
     );
   }
