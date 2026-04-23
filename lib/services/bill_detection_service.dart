@@ -4,6 +4,7 @@ import 'package:image/image.dart' as img;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'ml_model_service.dart';
 import 'enhanced_denomination_detector.dart';
+import 'ocr_optimizer_service.dart';
 
 class BillAnalysis {
   final bool hasBilletFeatures;
@@ -82,24 +83,28 @@ class BillDetectionService {
       final currency = _guessCurrencyByColor(image);
       print('💱 Moneda detectada: $currency\n');
 
-      // 4. OCR DIRECTO (para debug)
+      // 4. OCR MEJORADO (para debug)
       print('📝 ═══════════════════════════════════════════════');
-      print('📝 INICIANDO OCR DIRECTO');
+      print('📝 INICIANDO OCR OPTIMIZADO');
       print('📝 ═══════════════════════════════════════════════\n');
 
-      final inputImage = InputImage.fromFilePath(imagePath);
-      final recognizedText = await _getTextRecognizer().processImage(inputImage);
-      final fullText = recognizedText.text.toUpperCase();
+      final ocrOptimizer = OCROptimizerService();
+      final optimizedOCR = await ocrOptimizer.optimizeAndRecognize(imagePath);
+      final fullText = optimizedOCR.text;
 
-      print('📄 TEXTO OCR COMPLETO:');
+      print('📄 TEXTO OCR OPTIMIZADO (${optimizedOCR.bestAngle}):');
       print('─────────────────────────────────────────────────');
       print(fullText.isNotEmpty ? fullText : '(vacío)');
       print('─────────────────────────────────────────────────\n');
 
       print('📊 ESTADÍSTICAS OCR:');
       print('   • Longitud: ${fullText.length} caracteres');
-      print('   • Bloques detectados: ${recognizedText.blocks.length}');
-      print('   • Confianza promedio: ${_calculateOCRConfidence(recognizedText)}');
+      print('   • Calidad: ${(optimizedOCR.quality * 100).toStringAsFixed(1)}%');
+      print('   • Mejor ángulo: ${optimizedOCR.bestAngle}');
+      print('   • Todas las orientaciones:');
+      for (final entry in optimizedOCR.allResults.entries) {
+        print('     ${entry.key}: ${(entry.value * 100).toStringAsFixed(1)}%');
+      }
       print('');
 
       // 5. Usar nuevo detector de denominación

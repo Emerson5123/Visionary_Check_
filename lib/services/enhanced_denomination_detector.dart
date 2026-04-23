@@ -2,6 +2,8 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:image/image.dart' as img;
 import 'dart:io';
 import 'dart:math';
+import 'fuzzy_matcher_service.dart';
+import 'authenticity_detector_v2.dart';
 
 class EnhancedDenominationDetector {
   static final EnhancedDenominationDetector _instance =
@@ -18,7 +20,7 @@ class EnhancedDenominationDetector {
     if (_isInitialized) return;
     _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
     _isInitialized = true;
-    print('✅ Denominación detector inicializado');
+    print('✅ Denominación detector V2 inicializado');
   }
 
   Future<DenominationDetectionResult> detectDenomination(
@@ -29,51 +31,44 @@ class EnhancedDenominationDetector {
       await initialize();
 
       final image = img.decodeImage(File(imagePath).readAsBytesSync());
-      if (image == null) {
-        throw Exception('No se pudo decodificar la imagen');
-      }
+      if (image == null) throw Exception('No se pudo decodificar');
 
       print('\n🔍 ═══════════════════════════════════════════════════');
-      print('🔍 INICIANDO DETECCIÓN DE DENOMINACIÓN (MEJORADO)');
+      print('🔍 DETECCIÓN V2.0 - MEJORADA');
       print('🔍 ═══════════════════════════════════════════════════\n');
 
       // CAPA 1: OCR
-      print('📝 CAPA 1: Realizando OCR...');
+      print('📝 CAPA 1: OCR...');
       final ocrResults = await _performOCR(imagePath);
-      print('   ✓ Texto detectado: ${ocrResults['text'].substring(0, min(100, (ocrResults['text'] as String).length))}...\n');
 
-      // CAPA 2: Búsqueda FUZZY de números
-      print('🔢 CAPA 2: Búsqueda FUZZY de números...');
-      final numericResult = _analyzeFuzzyNumeric(ocrResults['text'] as String, currency);
-      print('   Resultado: ${numericResult.denomination} (${(numericResult.confidence * 100).toStringAsFixed(0)}%)\n');
+      // CAPA 2: Análisis de Fuzzy Matching
+      print('🔎 CAPA 2: Fuzzy Matching (Levenshtein)...');
+      final fuzzyResult = _analyzeFuzzyKeywords(ocrResults['text'] as String, currency);
 
-      // CAPA 3: Búsqueda FUZZY de palabras clave
-      print('📚 CAPA 3: Búsqueda FUZZY de palabras clave...');
-      final keywordResult = _analyzeFuzzyKeywords(ocrResults['text'] as String, currency);
-      print('   Resultado: ${keywordResult.denomination} (${(keywordResult.confidence * 100).toStringAsFixed(0)}%)\n');
+      // CAPA 3: Búsqueda de números directo
+      print('🔢 CAPA 3: Búsqueda de números...');
+      final numericResult = _analyzeNumbers(ocrResults['text'] as String);
 
-      // CAPA 4: Análisis de fragmentos clave
-      print('🔍 CAPA 4: Análisis de fragmentos clave...');
-      final fragmentResult = _analyzeKeyFragments(ocrResults['text'] as String, currency);
-      print('   Resultado: ${fragmentResult.denomination} (${(fragmentResult.confidence * 100).toStringAsFixed(0)}%)\n');
+      // CAPA 4: Análisis de líneas individuales
+      print('📋 CAPA 4: Análisis por línea...');
+      final lineResult = _analyzeByLines(ocrResults['text'] as String, currency);
 
-      // CAPA 5: Análisis de color
-      print('🎨 CAPA 5: Análisis de color...');
-      final colorResult = _analyzeColorProfile(image, currency);
-      print('   Resultado: ${colorResult.denomination} (${(colorResult.confidence * 100).toStringAsFixed(0)}%)\n');
+      // CAPA 5: Detección de fotocopia
+      print('📸 CAPA 5: Detección de fotocopia...');
+      final authenticityScore = await AuthenticityDetectorV2.detectPhotocopy(image);
 
       // FUSIÓN
-      print('🧠 CAPA 6: Fusionando resultados...');
-      final finalResult = _fuseResults(
+      print('🧠 CAPA 6: Fusionando...');
+      final finalResult = _fuseAllResults(
+        fuzzyResult: fuzzyResult,
         numericResult: numericResult,
-        keywordResult: keywordResult,
-        fragmentResult: fragmentResult,
-        colorResult: colorResult,
+        lineResult: lineResult,
+        authenticity: authenticityScore,
         currency: currency,
       );
 
       print('═══════════════════════════════════════════════════');
-      print('✅ RESULTADO FINAL: ${finalResult.denomination}');
+      print('✅ RESULTADO: ${finalResult.denomination}');
       print('   Confianza: ${(finalResult.confidence * 100).toStringAsFixed(1)}%');
       print('═══════════════════════════════════════════════════\n');
 
@@ -90,112 +85,55 @@ class EnhancedDenominationDetector {
     }
   }
 
-  /// OCR
   Future<Map<String, dynamic>> _performOCR(String imagePath) async {
     try {
       final inputImage = InputImage.fromFilePath(imagePath);
       final recognized = await _textRecognizer.processImage(inputImage);
       final text = recognized.text.toUpperCase();
 
+      print('   ✓ ${text.length} caracteres detectados');
+
       return {
         'text': text,
+        'blocks': recognized.blocks,
         'confidence': _calculateOCRConfidence(recognized),
       };
     } catch (e) {
-      print('   ⚠️ Error: $e');
-      return {'text': '', 'confidence': 0.0};
+      print('   ⚠️ Error OCR: $e');
+      return {
+        'text': '',
+        'blocks': [],
+        'confidence': 0.0,
+      };
     }
   }
 
   double _calculateOCRConfidence(RecognizedText recognized) {
     if (recognized.blocks.isEmpty) return 0.0;
 
-    double totalConfidence = 0.0;
-    int elementCount = 0;
+    double total = 0.0;
+    int count = 0;
 
     for (final block in recognized.blocks) {
       for (final line in block.lines) {
         for (final element in line.elements) {
           final conf = element.confidence ?? 0.0;
-          totalConfidence += conf;
-          elementCount++;
+          total += conf;
+          count++;
         }
       }
     }
 
-    if (elementCount == 0) return 0.0;
-    return (totalConfidence / elementCount).clamp(0.0, 1.0);
+    return count > 0 ? (total / count).clamp(0.0, 1.0) : 0.0;
   }
 
-  /// ═══════════════════════════════════════════════════════════════
-  /// CAPA 2: BÚSQUEDA FUZZY DE NÚMEROS
-  /// ═══════════════════════════════════════════════════════════════
-
-  DenominationCandidate _analyzeFuzzyNumeric(
+  DenominationCandidate _analyzeFuzzyKeywords(
       String text,
       String currency,
       ) {
     final candidates = <String, int>{};
-
-    // Patrones más flexibles
-    final patterns = [
-      (r'(?:^|\D)(1)(?:\D|$)', '1', 5),
-      (r'(?:^|\D)(2)(?:\D|$)', '2', 5),
-      (r'(?:^|\D)(5)(?:\D|$)', '5', 6),
-      (r'(?:^|\D)(10)(?:\D|$)', '10', 7),
-      (r'(?:^|\D)(20)(?:\D|$)', '20', 7),
-      (r'(?:^|\D)(50)(?:\D|$)', '50', 7),
-      (r'(?:^|\D)(100)(?:\D|$)', '100', 7),
-    ];
-
-    for (final (pattern, denom, score) in patterns) {
-      final matches = RegExp(pattern).allMatches(text);
-      if (matches.isNotEmpty) {
-        final count = min(matches.length, 5);
-        candidates[denom] = (candidates[denom] ?? 0) + (score * count);
-        print('   ✓ Número "$denom" encontrado $count veces');
-      }
-    }
-
-    if (candidates.isEmpty) {
-      print('   ✗ No números detectados');
-      return DenominationCandidate(
-        denomination: 'Unknown',
-        confidence: 0.0,
-        method: 'numeric',
-        allCandidates: {},
-      );
-    }
-
-    String bestDenom = candidates.keys.first;
-    int bestScore = candidates[bestDenom]!;
-
-    candidates.forEach((d, s) {
-      if (s > bestScore) {
-        bestScore = s;
-        bestDenom = d;
-      }
-    });
-
-    final confidence = min((bestScore / 35).toDouble(), 1.0);
-    return DenominationCandidate(
-      denomination: bestDenom,
-      confidence: confidence,
-      method: 'numeric',
-      allCandidates: {for (final e in candidates.entries) e.key: min((e.value / 35).toDouble(), 1.0)},
-    );
-  }
-
-  /// ═══════════════════════════════════════════════════════════════
-  /// CAPA 3: BÚSQUEDA FUZZY DE PALABRAS CLAVE
-  /// ═══════════════════════════════════════════════════════════════
-
-  DenominationCandidate _analyzeFuzzyKeywords(String text, String currency) {
-    final candidates = <String, int>{};
-
-    final keywordMap = currency == 'USD'
-        ? _getUSDKeywords()
-        : _getEcuadorKeywords();
+    final keywordMap =
+    currency == 'USD' ? _getUSDKeywords() : _getEcuadorKeywords();
 
     print('   Buscando en ${keywordMap.length} denominaciones...');
 
@@ -206,8 +144,8 @@ class EnhancedDenominationDetector {
       int matchCount = 0;
 
       for (final keyword in keywords) {
-        // Búsqueda FUZZY: substring de al menos 4 caracteres
-        if (_fuzzyMatch(text, keyword)) {
+        if (FuzzyMatcherService.fuzzyContains(text, keyword,
+            threshold: 0.70)) {
           matchCount++;
         }
       }
@@ -219,310 +157,262 @@ class EnhancedDenominationDetector {
     }
 
     if (candidates.isEmpty) {
-      print('   ✗ No palabras clave encontradas');
       return DenominationCandidate(
         denomination: 'Unknown',
         confidence: 0.0,
-        method: 'keywords',
+        method: 'fuzzy',
         allCandidates: {},
       );
     }
 
-    String bestDenom = candidates.keys.first;
-    int bestScore = candidates[bestDenom]!;
+    String best = candidates.keys.first;
+    int bestScore = candidates[best]!;
 
     candidates.forEach((d, s) {
       if (s > bestScore) {
         bestScore = s;
-        bestDenom = d;
+        best = d;
       }
     });
 
     final totalKeywords = keywordMap.values.first.length;
     final confidence = (bestScore / totalKeywords).clamp(0.0, 1.0);
 
-    print('   ✓ Mejor: \$$bestDenom (${bestScore}/${totalKeywords})');
-
     return DenominationCandidate(
-      denomination: bestDenom,
+      denomination: best,
       confidence: confidence,
-      method: 'keywords',
+      method: 'fuzzy',
       allCandidates: {
-        for (final e in candidates.entries) e.key: (e.value / totalKeywords).clamp(0.0, 1.0)
+        for (final e in candidates.entries)
+          e.key: (e.value / totalKeywords).clamp(0.0, 1.0)
       },
     );
   }
 
-  /// Fuzzy match: permite diferencias pequeñas
-  bool _fuzzyMatch(String text, String keyword) {
-    // Si el keyword es muy corto, búsqueda exacta
-    if (keyword.length < 3) {
-      return text.contains(keyword);
+  DenominationCandidate _analyzeNumbers(String text) {
+    final denom = FuzzyMatcherService.findDenominationNumber(text);
+
+    if (denom != null) {
+      print('   ✓ Número encontrado: \$$denom');
+      return DenominationCandidate(
+        denomination: denom,
+        confidence: 0.8,
+        method: 'numeric',
+        allCandidates: {denom: 0.8},
+      );
     }
 
-    // Para keywords largos, buscar substring similar
-    final keywordLower = keyword.toLowerCase();
-    final textLower = text.toLowerCase();
-
-    // Búsqueda directa
-    if (textLower.contains(keywordLower)) {
-      return true;
-    }
-
-    // Búsqueda por fragmentos (primeros 4+ caracteres)
-    for (int i = 4; i <= keywordLower.length; i++) {
-      final fragment = keywordLower.substring(0, i);
-      if (textLower.contains(fragment)) {
-        return true;
-      }
-    }
-
-    return false;
+    print('   ✗ Sin números detectados');
+    return DenominationCandidate(
+      denomination: 'Unknown',
+      confidence: 0.0,
+      method: 'numeric',
+      allCandidates: {},
+    );
   }
 
-  /// ═══════════════════════════════════════════════════════════════
-  /// CAPA 4: ANÁLISIS DE FRAGMENTOS CLAVE
-  /// ═══════════════════════════════════════════════════════════════
-
-  DenominationCandidate _analyzeKeyFragments(String text, String currency) {
+  DenominationCandidate _analyzeByLines(String text, String currency) {
+    final lines = FuzzyMatcherService.extractLines(text);
     final candidates = <String, int>{};
 
-    // Fragmentos muy específicos que aparecen en billetes
-    final fragmentMap = {
-      '1': ['WASHINGTON', 'MOUNT VERNON', 'ONE DOLL', 'SEAL'],
-      '5': ['LINCOLN', 'MEMORIAL', 'FIVE'],
-      '10': ['HAMILTON', 'TREASURY', 'TEN'],
-      '20': ['JACKSON', 'WHITE HOUSE', 'TWENTY'],
-      '50': ['GRANT', 'CAPITOL', 'FIFTY'],
-      '100': ['FRANKLIN', 'INDEPENDENCE', 'HUNDRED'],
-    };
+    print('   Analizando ${lines.length} líneas...');
 
-    print('   Analizando fragmentos clave...');
-
-    for (final entry in fragmentMap.entries) {
-      final denom = entry.key;
-      final fragments = entry.value;
-
-      int matchCount = 0;
-
-      for (final fragment in fragments) {
-        if (text.contains(fragment)) {
-          matchCount++;
-          print('   ✓ \$$denom: encontrado "$fragment"');
-        }
+    for (final line in lines) {
+      // Denominación $20
+      if (line.contains('JACKSON') || line.contains('ACKSON') ||
+          line.contains('WHITE') || line.contains('HOUSE') ||
+          line.contains('TWENTY')) {
+        candidates['20'] = (candidates['20'] ?? 0) + 5;
+        print('   ✓ Línea contiene palabras de \$20');
       }
 
-      if (matchCount > 0) {
-        candidates[denom] = matchCount * 3; // Mayor peso
+      // Denominación $10
+      if (line.contains('HAMILTON') || line.contains('AMILTON') ||
+          line.contains('HAMILTON') || line.contains('TREASURY') ||
+          line.contains('SECRETARY') || line.contains('TEN')) {
+        candidates['10'] = (candidates['10'] ?? 0) + 5;
+        print('   ✓ Línea contiene palabras de \$10');
+      }
+
+      // Denominación $5
+      if (line.contains('LINCOLN') || line.contains('INCOLN') ||
+          line.contains('MEMORIAL') || line.contains('EMORIAL') ||
+          line.contains('FIVE') || line.contains('LOG CABIN')) {
+        candidates['5'] = (candidates['5'] ?? 0) + 5;
+        print('   ✓ Línea contiene palabras de \$5');
+      }
+
+      // Denominación $1
+      if (line.contains('WASHINGTON') || line.contains('ASHINGTON') ||
+          line.contains('VERNON') || line.contains('ONE DOLL') ||
+          line.contains('SEAL')) {
+        candidates['1'] = (candidates['1'] ?? 0) + 5;
+        print('   ✓ Línea contiene palabras de \$1');
+      }
+
+      // Denominación $50
+      if (line.contains('GRANT') || line.contains('CAPITOL') ||
+          line.contains('APITOL') || line.contains('FIFTY') ||
+          line.contains('CIVIL WAR')) {
+        candidates['50'] = (candidates['50'] ?? 0) + 5;
+        print('   ✓ Línea contiene palabras de \$50');
+      }
+
+      // Denominación $100
+      if (line.contains('FRANKLIN') || line.contains('RANKLIN') ||
+          line.contains('INDEPENDENCE') || line.contains('HALL') ||
+          line.contains('HUNDRED')) {
+        candidates['100'] = (candidates['100'] ?? 0) + 5;
+        print('   ✓ Línea contiene palabras de \$100');
+      }
+
+      // Detectar números directos en la línea
+      final lineNumbers = FuzzyMatcherService.extractNumbers(line);
+      for (final num in lineNumbers) {
+        final denominations = ['1', '2', '5', '10', '20', '50', '100'];
+        if (denominations.contains(num)) {
+          candidates[num] = (candidates[num] ?? 0) + 4;
+          print('   ✓ Número \$$num detectado en línea');
+        }
       }
     }
 
     if (candidates.isEmpty) {
-      print('   ✗ No fragmentos detectados');
       return DenominationCandidate(
         denomination: 'Unknown',
         confidence: 0.0,
-        method: 'fragments',
+        method: 'lines',
         allCandidates: {},
       );
     }
 
-    String bestDenom = candidates.keys.first;
-    int bestScore = candidates[bestDenom]!;
+    String best = candidates.keys.first;
+    int bestScore = candidates[best]!;
 
     candidates.forEach((d, s) {
       if (s > bestScore) {
         bestScore = s;
-        bestDenom = d;
-      }
-    });
-
-    final confidence = min((bestScore / 12).toDouble(), 1.0);
-
-    return DenominationCandidate(
-      denomination: bestDenom,
-      confidence: confidence,
-      method: 'fragments',
-      allCandidates: {for (final e in candidates.entries) e.key: min((e.value / 12).toDouble(), 1.0)},
-    );
-  }
-
-  /// ═══════════════════════════════════════════════════════════════
-  /// CAPA 5: ANÁLISIS DE COLOR
-  /// ═══════════════════════════════════════════════════════════════
-
-  DenominationCandidate _analyzeColorProfile(img.Image image, String currency) {
-    final dominantColor = _getDominantColor(image);
-    final candidates = <String, double>{};
-
-    print('   Color: RGB${dominantColor}');
-
-    if (currency == 'USD') {
-      final usdColors = {
-        '1': (142, 110, 48),
-        '5': (76, 149, 109),
-        '10': (255, 165, 0),
-        '20': (0, 102, 204),
-        '50': (204, 0, 0),
-        '100': (0, 51, 102),
-      };
-
-      for (final entry in usdColors.entries) {
-        final distance = _colorDistance(dominantColor, entry.value);
-        final similarity = 1.0 - min(distance / 500, 1.0);
-        candidates[entry.key] = similarity;
-
-        if (similarity > 0.4) {
-          print('   ✓ \$${entry.key}: ${(similarity * 100).toStringAsFixed(0)}%');
-        }
-      }
-    }
-
-    if (candidates.isEmpty) {
-      return DenominationCandidate(
-        denomination: 'Unknown',
-        confidence: 0.0,
-        method: 'color',
-        allCandidates: candidates,
-      );
-    }
-
-    String bestDenom = candidates.keys.first;
-    double bestScore = candidates[bestDenom]!;
-
-    candidates.forEach((d, s) {
-      if (s > bestScore) {
-        bestScore = s;
-        bestDenom = d;
+        best = d;
       }
     });
 
     return DenominationCandidate(
-      denomination: bestDenom,
-      confidence: bestScore,
-      method: 'color',
-      allCandidates: candidates,
+      denomination: best,
+      confidence: (bestScore / 9).clamp(0.0, 1.0),
+      method: 'lines',
+      allCandidates: {for (final e in candidates.entries) e.key: (e.value / 9).clamp(0.0, 1.0)},
     );
   }
 
-  (int, int, int) _getDominantColor(img.Image image) {
-    final centerX = image.width ~/ 2;
-    final centerY = image.height ~/ 2;
-    final sampleSize = min(image.width, image.height) ~/ 4;
-
-    int r = 0, g = 0, b = 0, count = 0;
-
-    for (int y = centerY - sampleSize; y < centerY + sampleSize; y++) {
-      for (int x = centerX - sampleSize; x < centerX + sampleSize; x++) {
-        if (x >= 0 && x < image.width && y >= 0 && y < image.height) {
-          final px = image.getPixel(x, y);
-          r += px.r.toInt();
-          g += px.g.toInt();
-          b += px.b.toInt();
-          count++;
-        }
-      }
-    }
-
-    if (count == 0) return (128, 128, 128);
-    return (r ~/ count, g ~/ count, b ~/ count);
-  }
-
-  double _colorDistance((int, int, int) c1, (int, int, int) c2) {
-    final dr = c1.$1 - c2.$1;
-    final dg = c1.$2 - c2.$2;
-    final db = c1.$3 - c2.$3;
-    return sqrt((dr * dr + dg * dg + db * db).toDouble());
-  }
-
-  /// ═══════════════════════════════════════════════════════════════
-  /// FUSIÓN FINAL
-  /// ═══════════════════════════════════════════════════════════════
-
-  DenominationDetectionResult _fuseResults({
+  DenominationDetectionResult _fuseAllResults({
+    required DenominationCandidate fuzzyResult,
     required DenominationCandidate numericResult,
-    required DenominationCandidate keywordResult,
-    required DenominationCandidate fragmentResult,
-    required DenominationCandidate colorResult,
+    required DenominationCandidate lineResult,
+    required AuthenticityScore authenticity,
     required String currency,
   }) {
-    // Pesos optimizados
     const weights = {
-      'numeric': 0.25,
-      'keywords': 0.25,
-      'fragments': 0.35,  // Mayor peso
-      'color': 0.15,
+      'fuzzy': 0.40,
+      'numeric': 0.35,
+      'lines': 0.25,
     };
 
-    final allDenominations = <String, double>{};
+    final all = <String, double>{};
 
-    _addWeightedScores(allDenominations, numericResult, weights['numeric']!);
-    _addWeightedScores(allDenominations, keywordResult, weights['keywords']!);
-    _addWeightedScores(allDenominations, fragmentResult, weights['fragments']!);
-    _addWeightedScores(allDenominations, colorResult, weights['color']!);
+    _addWeighted(all, fuzzyResult, weights['fuzzy']!);
+    _addWeighted(all, numericResult, weights['numeric']!);
+    _addWeighted(all, lineResult, weights['lines']!);
 
-    if (allDenominations.isEmpty) {
+    if (all.isEmpty) {
       return DenominationDetectionResult(
         denomination: 'No detectada',
         confidence: 0.0,
         method: 'fusion',
-        allCandidates: allDenominations,
-        reasoning: 'No se pudo identificar',
+        allCandidates: all,
+        reasoning: 'No se detectó',
       );
     }
 
     print('\n   Scores finales:');
-    String bestDenom = allDenominations.keys.first;
-    double bestScore = allDenominations[bestDenom]!;
+    String best = all.keys.first;
+    double bestScore = all[best]!;
 
-    allDenominations.forEach((d, s) {
+    all.forEach((d, s) {
       print('   \$$d: ${(s * 100).toStringAsFixed(1)}%');
       if (s > bestScore) {
         bestScore = s;
-        bestDenom = d;
+        best = d;
       }
     });
+
+    // Penalizar si es fotocopia
+    if (authenticity.isLikelyPhotocopy) {
+      bestScore *= 0.5;
+      print('\n   ⚠️ FOTOCOPIA DETECTADA - Score reducido 50%');
+    }
 
     bestScore = bestScore.clamp(0.0, 1.0);
 
     return DenominationDetectionResult(
-      denomination: bestDenom,
+      denomination: best,
       confidence: bestScore,
-      method: 'fusion',
-      allCandidates: allDenominations,
-      reasoning: '\$$bestDenom (${(bestScore * 100).toStringAsFixed(1)}%)',
+      method: 'fusion_v2',
+      allCandidates: all,
+      reasoning:
+      '\$$best (${(bestScore * 100).toStringAsFixed(1)}%)\n${authenticity.indicators.join('\n')}',
     );
   }
 
-  void _addWeightedScores(
-      Map<String, double> accumulated,
-      DenominationCandidate candidate,
-      double weight,
-      ) {
-    candidate.allCandidates.forEach((denom, score) {
-      accumulated[denom] = (accumulated[denom] ?? 0) + (score * weight);
+  void _addWeighted(Map<String, double> acc, DenominationCandidate cand, double w) {
+    cand.allCandidates.forEach((d, s) {
+      acc[d] = (acc[d] ?? 0) + (s * w);
     });
   }
 
   Map<String, List<String>> _getUSDKeywords() {
     return {
-      '1': ['ONE', 'DOLLAR', 'WASHINGTON', 'MOUNT', 'VERNON', 'FEDERAL', 'RESERVE'],
-      '5': ['FIVE', 'LINCOLN', 'MEMORIAL', 'FEDERAL', 'RESERVE'],
-      '10': ['TEN', 'HAMILTON', 'TREASURY', 'FEDERAL', 'RESERVE'],
-      '20': ['TWENTY', 'JACKSON', 'WHITE', 'HOUSE', 'FEDERAL', 'RESERVE'],
-      '50': ['FIFTY', 'GRANT', 'CAPITOL', 'FEDERAL', 'RESERVE'],
-      '100': ['HUNDRED', 'FRANKLIN', 'INDEPENDENCE', 'HALL', 'FEDERAL', 'RESERVE'],
+      '1': [
+        'ONE', 'DOLLAR', 'WASHINGTON', 'MOUNT', 'VERNON', 'SEAL',
+        'GREAT', 'SINGLE', 'UNITED STATES', 'FEDERAL', 'RESERVE',
+        'TREASURY', 'NOTE', 'LEGAL TENDER', 'IN GOD WE TRUST'
+      ],
+      '5': [
+        'FIVE', 'LINCOLN', 'MEMORIAL', 'PRESIDENT', 'EMANCIPATION',
+        'LOG CABIN', 'UNITED STATES', 'FEDERAL', 'RESERVE', 'TREASURY',
+        'NOTE', 'LEGAL TENDER', 'IN GOD WE TRUST', 'PENNY'
+      ],
+      '10': [
+        'TEN', 'HAMILTON', 'TREASURY', 'SECRETARY', 'ALEXANDER',
+        'BUILDING', 'FINANCE', 'FEDERAL', 'RESERVE', 'UNITED STATES',
+        'NOTE', 'LEGAL TENDER', 'IN GOD WE TRUST', 'GOVERNMENT'
+      ],
+      '20': [
+        'TWENTY', 'JACKSON', 'WHITE', 'HOUSE', 'DEMOCRAT', 'ANDREW',
+        'REMOVE', 'NATIVE AMERICAN', 'FEDERAL', 'RESERVE', 'TREASURY',
+        'NOTE', 'LEGAL TENDER', 'IN GOD WE TRUST', 'UNITED STATES'
+      ],
+      '50': [
+        'FIFTY', 'GRANT', 'CAPITOL', 'BUILDING', 'ULYSSES', 'CIVIL WAR',
+        'GENERAL', 'FEDERAL', 'RESERVE', 'TREASURY', 'NOTE',
+        'LEGAL TENDER', 'IN GOD WE TRUST', 'UNITED STATES'
+      ],
+      '100': [
+        'HUNDRED', 'FRANKLIN', 'INDEPENDENCE', 'HALL', 'PHILADELPHIA',
+        'BENJAMIN', 'SCIENTIST', 'INVENTOR', 'FEDERAL', 'RESERVE',
+        'TREASURY', 'NOTE', 'LEGAL TENDER', 'IN GOD WE TRUST',
+        'UNITED STATES', 'LIBERTY'
+      ],
     };
   }
 
   Map<String, List<String>> _getEcuadorKeywords() {
     return {
-      '1': ['UN', 'DÓLAR', 'ECUADOR', 'BANCO', 'CENTRAL'],
-      '5': ['CINCO', 'DÓLAR', 'ECUADOR', 'BANCO'],
-      '10': ['DIEZ', 'DÓLAR', 'ECUADOR', 'BANCO'],
-      '20': ['VEINTE', 'DÓLAR', 'ECUADOR', 'BANCO'],
-      '50': ['CINCUENTA', 'DÓLAR', 'ECUADOR', 'BANCO'],
-      '100': ['CIEN', 'DÓLAR', 'ECUADOR', 'BANCO'],
+      '1': ['UN', 'DÓLAR', 'ECUADOR'],
+      '5': ['CINCO', 'DÓLAR'],
+      '10': ['DIEZ', 'DÓLAR'],
+      '20': ['VEINTE', 'DÓLAR'],
+      '50': ['CINCUENTA', 'DÓLAR'],
+      '100': ['CIEN', 'DÓLAR'],
     };
   }
 
