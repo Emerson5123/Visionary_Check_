@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:image/image.dart' as img;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'ml_model_service.dart';
+import 'enhanced_denomination_detector.dart';
 
 class BillAnalysis {
   final bool hasBilletFeatures;
@@ -41,6 +42,7 @@ class BillAnalysis {
 class BillDetectionService {
   static final BillDetectionService _instance = BillDetectionService._internal();
   late MLModelService _mlService;
+  late EnhancedDenominationDetector _denomDetector;
   late TextRecognizer _textRecognizer;
   bool _authInitialized = false;
 
@@ -49,57 +51,194 @@ class BillDetectionService {
   BillDetectionService._internal() {
     _mlService = MLModelService();
     _mlService.initialize();
+    _denomDetector = EnhancedDenominationDetector();
   }
 
   /// Analiza un billete usando OCR + autenticación mejorada
   Future<BillAnalysis> analyzeBill(String imagePath) async {
     try {
-      // Primero, usar el modelo ML existente para detección básica
-      final result = await _mlService.detectBill(imagePath);
-      final confStr = result.confidence.replaceAll('%', '');
-      final confDouble = (double.tryParse(confStr) ?? 0.0) / 100.0;
+      print('🔍 ════════════════════════════════════════════════');
+      print('🔍 INICIANDO ANÁLISIS DE BILLETE');
+      print('🔍 Archivo: $imagePath');
+      print('🔍 ════════════════════════════════════════════════\n');
 
-      // Si el billete fue detectado, aplicar análisis avanzado
-      if (result.isBill) {
-        final advancedAnalysis = await _performAdvancedAuthentication(
-          imagePath: imagePath,
-          basicResult: result,
-          basicConfidence: confDouble,
+      // 1. Verificar que archivo existe
+      final imageFile = File(imagePath);
+      if (!imageFile.existsSync()) {
+        throw Exception('Archivo no existe: $imagePath');
+      }
+      print('✅ Archivo encontrado\n');
+
+      // 2. Decodificar imagen
+      final imageBytes = await imageFile.readAsBytes();
+      final image = img.decodeImage(imageBytes);
+
+      if (image == null) {
+        throw Exception('No se pudo decodificar la imagen');
+      }
+      print('✅ Imagen decodificada: ${image.width}x${image.height}\n');
+
+      // 3. Detectar moneda por color
+      final currency = _guessCurrencyByColor(image);
+      print('💱 Moneda detectada: $currency\n');
+
+      // 4. OCR DIRECTO (para debug)
+      print('📝 ═══════════════════════════════════════════════');
+      print('📝 INICIANDO OCR DIRECTO');
+      print('📝 ═══════════════════════════════════════════════\n');
+
+      final inputImage = InputImage.fromFilePath(imagePath);
+      final recognizedText = await _getTextRecognizer().processImage(inputImage);
+      final fullText = recognizedText.text.toUpperCase();
+
+      print('📄 TEXTO OCR COMPLETO:');
+      print('─────────────────────────────────────────────────');
+      print(fullText.isNotEmpty ? fullText : '(vacío)');
+      print('─────────────────────────────────────────────────\n');
+
+      print('📊 ESTADÍSTICAS OCR:');
+      print('   • Longitud: ${fullText.length} caracteres');
+      print('   • Bloques detectados: ${recognizedText.blocks.length}');
+      print('   • Confianza promedio: ${_calculateOCRConfidence(recognizedText)}');
+      print('');
+
+      // 5. Usar nuevo detector de denominación
+      print('🔢 Detectando denominación...\n');
+      final denomResult = await _denomDetector.detectDenomination(
+        imagePath,
+        currency,
+      );
+
+      print('\n✅ Denominación: ${denomResult.denomination}');
+      print('   Confianza: ${(denomResult.confidence * 100).toStringAsFixed(1)}%\n');
+
+      // 6. Análisis de autenticidad
+      if (denomResult.confidence > 0.3) {
+        print('🔐 Iniciando análisis de autenticidad...\n');
+
+        final result = await _mlService.detectBill(imagePath);
+
+        if (result.isBill) {
+          final advancedAnalysis = await _performAdvancedAuthentication(
+            imagePath: imagePath,
+            basicResult: result,
+            denomination: denomResult.denomination,
+            currency: currency,
+          );
+          return advancedAnalysis;
+        }
+
+        return BillAnalysis(
+          hasBilletFeatures: result.isBill,
+          isAuthentic: result.isAuthentic,
+          confidence: denomResult.confidence,
+          denomination: denomResult.denomination,
+          currency: currency,
+          details: denomResult.reasoning,
+          detectedKeywords: result.detectedKeywords,
         );
-        return advancedAnalysis;
       }
 
-      // Si no es billete, retornar resultado básico
+      // Sin denominación
       return BillAnalysis(
-        hasBilletFeatures: result.isBill,
-        isAuthentic: result.isAuthentic,
-        confidence: confDouble,
-        denomination: result.denomination,
-        currency: result.currency,
-        details: result.details,
-        detectedKeywords: result.detectedKeywords,
+        hasBilletFeatures: false,
+        isAuthentic: false,
+        confidence: 0.0,
+        denomination: 'No detectada',
+        currency: currency,
+        details: 'No se pudo identificar la denominación del billete.\n\nAsegúrate de:\n✓ Tomar foto en luz natural\n✓ Billete completamente visible\n✓ Ángulo frontal\n✓ Foto clara y enfocada',
       );
     } catch (e) {
-      print('Error en BillDetectionService: $e');
+      print('❌ ERROR: $e\n');
       return BillAnalysis(
         hasBilletFeatures: false,
         isAuthentic: false,
         confidence: 0.0,
         denomination: 'Error',
         currency: 'UNKNOWN',
-        details: 'Error al procesar la imagen: $e',
+        details: 'Error: $e',
       );
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // ANÁLISIS AVANZADO DE AUTENTICACIÓN (5 detectores)
-  // ═══════════════════════════════════════════════════════════════
+  TextRecognizer _getTextRecognizer() {
+    if (!_authInitialized) {
+      _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+      _authInitialized = true;
+    }
+    return _textRecognizer;
+  }
 
+  double _calculateOCRConfidence(RecognizedText recognized) {
+    if (recognized.blocks.isEmpty) return 0.0;
+
+    double totalConfidence = 0.0;
+    int elementCount = 0;
+
+    for (final block in recognized.blocks) {
+      for (final line in block.lines) {
+        for (final element in line.elements) {
+          final conf = element.confidence ?? 0.0;
+          totalConfidence += conf;
+          elementCount++;
+        }
+      }
+    }
+
+    if (elementCount == 0) return 0.0;
+    return (totalConfidence / elementCount).clamp(0.0, 1.0);
+  }
+
+  /// Detecta moneda por color dominante
+  String _guessCurrencyByColor(img.Image image) {
+    try {
+      final cx = image.width ~/ 2;
+      final cy = image.height ~/ 2;
+      int tR = 0, tG = 0, tB = 0, n = 0;
+
+      // Muestrear centro de la imagen
+      for (int dy = -30; dy <= 30; dy += 5) {
+        for (int dx = -30; dx <= 30; dx += 5) {
+          final x = cx + dx;
+          final y = cy + dy;
+
+          if (x >= 0 && x < image.width && y >= 0 && y < image.height) {
+            final px = image.getPixel(x, y);
+            tR += px.r.toInt();
+            tG += px.g.toInt();
+            tB += px.b.toInt();
+            n++;
+          }
+        }
+      }
+
+      if (n == 0) return 'UNKNOWN';
+
+      final aR = tR ~/ n;
+      final aG = tG ~/ n;
+      final aB = tB ~/ n;
+
+      // USD = más verde
+      // ECU = más rojo/naranja
+      if (aG > aR + 15) {
+        return 'USD';
+      } else if (aR >= aG - 10) {
+        return 'ECU';
+      }
+
+      return 'UNKNOWN';
+    } catch (e) {
+      print('⚠️ Error detectando color: $e');
+      return 'USD'; // Default
+    }
+  }
+
+  /// Análisis avanzado de autenticidad (5 detectores)
   Future<BillAnalysis> _performAdvancedAuthentication({
     required String imagePath,
     required dynamic basicResult,
-    required double basicConfidence,
+    required String denomination,
+    required String currency,
   }) async {
     try {
       final file = File(imagePath);
@@ -139,14 +278,14 @@ class BillDetectionService {
 
       // DETECTOR 4: Histograma Avanzado
       print('  Detector 4: Histograma Avanzado...');
-      final (hist, feat4, susp4) = _analyzeAdvancedHistogram(image, basicResult.currency);
+      final (hist, feat4, susp4) = _analyzeAdvancedHistogram(image, currency);
       detectorScores['histogram'] = hist;
       detectedFeatures.addAll(feat4);
       suspiciousIndicators.addAll(susp4);
 
       // DETECTOR 5: OCR + Seguridad
       print('  Detector 5: OCR + Validación...');
-      final (ocr, feat5, susp5) = await _validateOCRAndSecurity(imagePath, basicResult.currency);
+      final (ocr, feat5, susp5) = await _validateOCRAndSecurity(imagePath, currency);
       detectorScores['ocr'] = ocr;
       detectedFeatures.addAll(feat5);
       suspiciousIndicators.addAll(susp5);
@@ -169,9 +308,9 @@ class BillDetectionService {
 
       final isAuthentic = weightedScore >= 0.65;
 
-      print('═══════════════════════════════════════════════════════════════');
+      print('════════════════════════════════════════════════════════════');
       print('✨ RESULTADO FINAL DEL ANÁLISIS AVANZADO');
-      print('═══════════════════════════════════════════════════════════════');
+      print('════════════════════════════════════════════════════════════');
       print('🎯 Score Ponderado: ${(weightedScore * 100).toStringAsFixed(1)}%');
       print('🔐 Autenticidad: ${isAuthentic ? '✅ AUTÉNTICO' : '⚠️ SOSPECHOSO'}');
       print('📋 Características detectadas: ${detectedFeatures.length}');
@@ -189,10 +328,10 @@ class BillDetectionService {
         hasBilletFeatures: true,
         isAuthentic: isAuthentic,
         confidence: weightedScore,
-        denomination: basicResult.denomination,
-        currency: basicResult.currency,
+        denomination: denomination,
+        currency: currency,
         details: reasoning,
-        detectedKeywords: basicResult.detectedKeywords,
+        detectedKeywords: basicResult.detectedKeywords ?? [],
         detectedFeatures: detectedFeatures,
         suspiciousIndicators: suspiciousIndicators,
       );
@@ -202,10 +341,9 @@ class BillDetectionService {
         hasBilletFeatures: true,
         isAuthentic: false,
         confidence: 0.0,
-        denomination: basicResult.denomination ?? 'Error',
-        currency: basicResult.currency ?? 'UNKNOWN',
+        denomination: denomination,
+        currency: currency,
         details: 'Error en análisis avanzado: $e',
-        detectedKeywords: basicResult.detectedKeywords ?? [],
       );
     }
   }
@@ -404,7 +542,8 @@ class BillDetectionService {
   // ═══════════════════════════════════════════════════════════════
 
   (double, List<String>, List<String>) _analyzeTexturePatterns(
-      img.Image image) {
+      img.Image image,
+      ) {
     final features = <String>[];
     final suspicious = <String>[];
     double score = 0.0;
@@ -474,8 +613,7 @@ class BillDetectionService {
   }
 
   List<double> _getExpectedLBPPattern() {
-    return List<double>.filled(256, 0.004)..[128] = 0.15..[64] = 0.12..[192] =
-    0.10;
+    return List<double>.filled(256, 0.004)..[128] = 0.15..[64] = 0.12..[192] = 0.10;
   }
 
   double _histogramDistance(List<int> h1, List<double> h2) {
@@ -517,12 +655,13 @@ class BillDetectionService {
     return periodCount > 3;
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ═══════════════════��═══════════════════════════════════════════
   // DETECTOR 3: Validación de Perspectiva
   // ═══════════════════════════════════════════════════════════════
 
   (double, List<String>, List<String>) _validatePerspective(
-      img.Image image) {
+      img.Image image,
+      ) {
     final features = <String>[];
     final suspicious = <String>[];
     double score = 0.5;
@@ -807,6 +946,7 @@ class BillDetectionService {
 
   void dispose() {
     _mlService.dispose();
+    _denomDetector.dispose();
     if (_authInitialized) {
       try {
         _textRecognizer.close();
