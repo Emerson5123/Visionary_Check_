@@ -67,7 +67,6 @@ class AuthenticityDetectorV2 {
   static (double, String) _analyzeNoise(img.Image image) {
     final gray = _toGrayscale(image);
 
-    // Calcular desviación estándar
     final mean = gray.reduce((a, b) => a + b) ~/ gray.length;
     final variance = gray
         .map((p) => (p - mean) * (p - mean))
@@ -75,9 +74,24 @@ class AuthenticityDetectorV2 {
         gray.length;
     final stdDev = sqrt(variance.toDouble());
 
-    // Fotocopias: stdDev > 30, Auténticos: 10-25
-    final noiseLevel = (stdDev - 10) / 30;
-    return (noiseLevel.clamp(0.0, 1.0), 'analysis');
+    // NUEVO: Thresholds más realistas
+    // Billetes USD auténticos: 12-28 (incluyendo usados)
+    // Billetes nuevos: 10-20
+    // Fotocopias digitales: 35+
+
+    if (stdDev > 45) {
+      // Fotocopia clara
+      return (1.0, 'Fotocopia');
+    } else if (stdDev > 35) {
+      // Posible fotocopia
+      return (0.7, 'Posible fotocopia');
+    } else if (stdDev > 28) {
+      // Billete auténtico usado (normal)
+      return (0.0, 'Auténtico');
+    } else {
+      // Billete auténtico (nuevo o bien mantenido)
+      return (0.0, 'Auténtico');
+    }
   }
 
   static bool _detectPeriodicPatterns(img.Image image) {

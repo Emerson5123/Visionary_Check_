@@ -218,61 +218,78 @@ class EnhancedDenominationDetector {
     print('   Analizando ${lines.length} líneas...');
 
     for (final line in lines) {
-      // Denominación $20
-      if (line.contains('JACKSON') || line.contains('ACKSON') ||
-          line.contains('WHITE') || line.contains('HOUSE') ||
-          line.contains('TWENTY')) {
-        candidates['20'] = (candidates['20'] ?? 0) + 5;
-        print('   ✓ Línea contiene palabras de \$20');
+      // ═══════════════════════════════════════════════════════════
+      // DENOMINACIÓN $10 - MEJORADA (PRIORIDAD)
+      // ═════════════════════════════════════════════════════════════
+      if (line.contains('HAMILTON') ||
+          line.contains('AMILTON') ||
+          line.contains('HAMILTO') ||  // ← OCR fragmentado
+          line.contains('TREASURY') ||
+          line.contains('REASURY') ||  // ← OCR fragmentado
+          line.contains('SECRETARY') ||
+          line.contains('ECRETARY') ||  // ← OCR fragmentado
+          line.contains('TEN DOLLAR') ||
+          line.contains('TEN DOLL')) {
+        candidates['10'] = (candidates['10'] ?? 0) + 15;  // ⭐ PESO MÁXIMO
+        print('   ✅ \$10: Palabras de Hamilton/Treasury detectadas');
       }
 
-      // Denominación $10
-      if (line.contains('HAMILTON') || line.contains('AMILTON') ||
-          line.contains('HAMILTON') || line.contains('TREASURY') ||
-          line.contains('SECRETARY') || line.contains('TEN')) {
-        candidates['10'] = (candidates['10'] ?? 0) + 5;
-        print('   ✓ Línea contiene palabras de \$10');
+      // DENOMINACIÓN $5 - LINCOLN
+      if (line.contains('LINCOLN') ||
+          line.contains('INCOLN') ||
+          line.contains('MEMORIAL') ||
+          line.contains('EMORIAL') ||
+          line.contains('FIVE DOLL')) {
+        candidates['5'] = (candidates['5'] ?? 0) + 12;
+        print('   ✅ \$5: Palabras de Lincoln detectadas');
       }
 
-      // Denominación $5
-      if (line.contains('LINCOLN') || line.contains('INCOLN') ||
-          line.contains('MEMORIAL') || line.contains('EMORIAL') ||
-          line.contains('FIVE') || line.contains('LOG CABIN')) {
-        candidates['5'] = (candidates['5'] ?? 0) + 5;
-        print('   ✓ Línea contiene palabras de \$5');
+      // DENOMINACIÓN $20 - JACKSON
+      if (line.contains('JACKSON') ||
+          line.contains('ACKSON') ||
+          line.contains('WHITE HOUSE') ||
+          line.contains('TWENTY DOLL')) {
+        candidates['20'] = (candidates['20'] ?? 0) + 12;
+        print('   ✅ \$20: Palabras de Jackson detectadas');
       }
 
-      // Denominación $1
-      if (line.contains('WASHINGTON') || line.contains('ASHINGTON') ||
-          line.contains('VERNON') || line.contains('ONE DOLL') ||
-          line.contains('SEAL')) {
-        candidates['1'] = (candidates['1'] ?? 0) + 5;
-        print('   ✓ Línea contiene palabras de \$1');
+      // DENOMINACIÓN $1 - WASHINGTON
+      if (line.contains('WASHINGTON') ||
+          line.contains('ASHINGTON') ||
+          line.contains('VERNON') ||
+          line.contains('ONE DOLL')) {
+        candidates['1'] = (candidates['1'] ?? 0) + 10;
+        print('   ✅ \$1: Palabras de Washington detectadas');
       }
 
-      // Denominación $50
-      if (line.contains('GRANT') || line.contains('CAPITOL') ||
-          line.contains('APITOL') || line.contains('FIFTY') ||
-          line.contains('CIVIL WAR')) {
-        candidates['50'] = (candidates['50'] ?? 0) + 5;
-        print('   ✓ Línea contiene palabras de \$50');
+      // DENOMINACIÓN $50 - GRANT
+      if (line.contains('GRANT') ||
+          line.contains('CAPITOL') ||
+          line.contains('APITOL') ||
+          line.contains('FIFTY DOLL')) {
+        candidates['50'] = (candidates['50'] ?? 0) + 12;
+        print('   ✅ \$50: Palabras de Grant detectadas');
       }
 
-      // Denominación $100
-      if (line.contains('FRANKLIN') || line.contains('RANKLIN') ||
-          line.contains('INDEPENDENCE') || line.contains('HALL') ||
-          line.contains('HUNDRED')) {
-        candidates['100'] = (candidates['100'] ?? 0) + 5;
-        print('   ✓ Línea contiene palabras de \$100');
+      // DENOMINACIÓN $100 - FRANKLIN
+      if (line.contains('FRANKLIN') ||
+          line.contains('RANKLIN') ||
+          line.contains('INDEPENDENCE HALL') ||
+          line.contains('HUNDRED DOLL')) {
+        candidates['100'] = (candidates['100'] ?? 0) + 12;
+        print('   ✅ \$100: Palabras de Franklin detectadas');
       }
 
-      // Detectar números directos en la línea
+      // Detectar números en la línea
       final lineNumbers = FuzzyMatcherService.extractNumbers(line);
       for (final num in lineNumbers) {
-        final denominations = ['1', '2', '5', '10', '20', '50', '100'];
-        if (denominations.contains(num)) {
-          candidates[num] = (candidates[num] ?? 0) + 4;
-          print('   ✓ Número \$$num detectado en línea');
+        if (num == '10') {
+          candidates['10'] = (candidates['10'] ?? 0) + 10;
+          print('   ✅ Número 10 detectado');
+        } else if (num == '5') {
+          candidates['5'] = (candidates['5'] ?? 0) + 8;
+        } else if (num == '20') {
+          candidates['20'] = (candidates['20'] ?? 0) + 8;
         }
       }
     }
@@ -298,9 +315,12 @@ class EnhancedDenominationDetector {
 
     return DenominationCandidate(
       denomination: best,
-      confidence: (bestScore / 9).clamp(0.0, 1.0),
+      confidence: min((bestScore / 15).toDouble(), 1.0),
       method: 'lines',
-      allCandidates: {for (final e in candidates.entries) e.key: (e.value / 9).clamp(0.0, 1.0)},
+      allCandidates: {
+        for (final e in candidates.entries)
+          e.key: min((e.value / 15).toDouble(), 1.0)
+      },
     );
   }
 

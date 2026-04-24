@@ -143,40 +143,63 @@ class BillDetectionService {
       final cy = image.height ~/ 2;
       int tR = 0, tG = 0, tB = 0, n = 0;
 
-      // Muestrear centro de la imagen
-      for (int dy = -30; dy <= 30; dy += 5) {
-        for (int dx = -30; dx <= 30; dx += 5) {
-          final x = cx + dx;
-          final y = cy + dy;
+      // Muestrear múltiples zonas (no solo centro)
+      final zones = [
+        (cy ~/ 2, cx ~/ 2),      // Arriba-izquierda
+        (cy ~/ 2, cx + cx ~/ 2), // Arriba-derecha
+        (cy + cy ~/ 2, cx ~/ 2), // Abajo-izquierda
+        (cy + cy ~/ 2, cx + cx ~/ 2), // Abajo-derecha
+        (cy, cx),                // Centro
+      ];
 
-          if (x >= 0 && x < image.width && y >= 0 && y < image.height) {
-            final px = image.getPixel(x, y);
-            tR += px.r.toInt();
-            tG += px.g.toInt();
-            tB += px.b.toInt();
-            n++;
-          }
+      for (final (y, x) in zones) {
+        if (x >= 0 && x < image.width && y >= 0 && y < image.height) {
+          final px = image.getPixel(x, y);
+          tR += px.r.toInt();
+          tG += px.g.toInt();
+          tB += px.b.toInt();
+          n++;
         }
       }
 
-      if (n == 0) return 'UNKNOWN';
+      if (n == 0) return 'USD'; // Default
 
       final aR = tR ~/ n;
       final aG = tG ~/ n;
       final aB = tB ~/ n;
 
-      // USD = más verde
-      // ECU = más rojo/naranja
-      if (aG > aR + 15) {
-        return 'USD';
-      } else if (aR >= aG - 10) {
+      print('🎨 Color promedio: RGB($aR, $aG, $aB)');
+
+      // USD: Verde (billetes $1, $5, $20, $50, $100)
+      // $1: Verde claro (142, 110, 48) - marrón-verdoso
+      // $5: Verde (76, 149, 109)
+      // $10: Gris-azulado (típico de USD)
+      // $20: Verde (0, 102, 204) - más azul
+      // $50: Rojo (204, 0, 0)
+      // $100: Azul oscuro (0, 51, 102)
+
+      // ECU: Más rojo/naranja
+
+      // Si es muy rojo/naranja → ECU
+      if (aR > 180 && aG < 100 && aB < 100) {
         return 'ECU';
       }
 
-      return 'UNKNOWN';
+      // Si tiene suficiente verde o azul → USD
+      if (aG > aR + 20 || aB > aR + 20) {
+        return 'USD';
+      }
+
+      // Si tiene componentes balanceados (típico de $10) → USD
+      if (aR > 100 && aG > 100 && aB > 100) {
+        return 'USD';
+      }
+
+      // Default: USD (mayoría de billetes)
+      return 'USD';
     } catch (e) {
       print('⚠️ Error detectando color: $e');
-      return 'USD'; // Default
+      return 'USD';
     }
   }
 
