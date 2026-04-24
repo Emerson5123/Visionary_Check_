@@ -4,8 +4,7 @@ import 'package:image/image.dart' as img;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'ml_model_service.dart';
 import 'enhanced_denomination_detector.dart';
-import 'image_enhancement_service.dart';
-import 'dataset_service.dart';
+import 'bill_number_extractor.dart';
 
 class BillAnalysis {
   final bool hasBilletFeatures;
@@ -17,6 +16,7 @@ class BillAnalysis {
   final List<String> detectedKeywords;
   final List<String> detectedFeatures;
   final List<String> suspiciousIndicators;
+  final BillNumbers? billNumbers;
 
   BillAnalysis({
     required this.hasBilletFeatures,
@@ -28,27 +28,30 @@ class BillAnalysis {
     this.detectedKeywords = const [],
     this.detectedFeatures = const [],
     this.suspiciousIndicators = const [],
+    this.billNumbers,
   });
 
   String get confidencePercentage => '${(confidence * 100).toStringAsFixed(0)}%';
 
   String get currencyLabel {
     switch (currency) {
-      case 'USD': return 'USD 🇺🇸';
-      case 'ECU': return 'Ecuador 🇪🇨';
-      default:    return 'Desconocida';
+      case 'USD':
+        return 'USD 🇺🇸';
+      case 'ECU':
+        return 'Ecuador 🇪🇨';
+      default:
+        return 'Desconocida';
     }
   }
 }
 
 class BillDetectionService {
-  static final BillDetectionService _instance = BillDetectionService._internal();
+  static final BillDetectionService _instance =
+  BillDetectionService._internal();
   late MLModelService _mlService;
   late EnhancedDenominationDetector _denomDetector;
-  late DatasetService _datasetService;
   late TextRecognizer _textRecognizer;
   bool _authInitialized = false;
-  bool _datasetInitialized = false;
 
   factory BillDetectionService() => _instance;
 
@@ -56,84 +59,131 @@ class BillDetectionService {
     _mlService = MLModelService();
     _mlService.initialize();
     _denomDetector = EnhancedDenominationDetector();
-    _datasetService = DatasetService();
-    _initDataset();
-  }
-
-  Future<void> _initDataset() async {
-    if (_datasetInitialized) return;
-    try {
-      await _datasetService.initializeExtendedDataset();
-      _datasetInitialized = true;
-      print('✅ DatasetService inicializado');
-    } catch (e) {
-      print('⚠️ Error inicializando DatasetService: $e');
-    }
   }
 
   /// Analiza un billete usando OCR + autenticación mejorada
   Future<BillAnalysis> analyzeBill(String imagePath) async {
     try {
-      print('🔍 Iniciando análisis de billete...');
+      print('🔍 ════════════════════════════════════════════════');
+      print('🔍 INICIANDO ANÁLISIS DE BILLETE');
+      print('🔍 Archivo: $imagePath');
+      print('🔍 ════════════════════════════════════════════════\n');
 
-      // 1. Leer imagen
+      // 1. Verificar que archivo existe
       final imageFile = File(imagePath);
+      if (!imageFile.existsSync()) {
+        throw Exception('Archivo no existe: $imagePath');
+      }
+      print('✅ Archivo encontrado\n');
+
+      // 2. Decodificar imagen
       final imageBytes = await imageFile.readAsBytes();
       final image = img.decodeImage(imageBytes);
 
       if (image == null) {
         throw Exception('No se pudo decodificar la imagen');
       }
+      print('✅ Imagen decodificada: ${image.width}x${image.height}\n');
 
-      // 2. Detectar moneda por color
+      // 🆕 3. EXTRAER NÚMEROS DEL BILLETE
+      print('🔢 ════════════════════════════════════════════════');
+      print('🔢 EXTRAYENDO NÚMEROS');
+      print('🔢 ════════════════════════════════════════════════');
+      final billNumbers = await BillNumberExtractor.extractNumbers(imagePath);
+
+      // 4. Detectar moneda por color
       final currency = _guessCurrencyByColor(image);
-      print('💱 Moneda detectada: $currency');
+      print('💱 Moneda detectada: $currency\n');
 
-      // 3. Usar nuevo detector de denominación
-      print('🔢 Detectando denominación...');
+      // 5. Detectar denominación
+      print('🔢 Detectando denominación...\n');
       final denomResult = await _denomDetector.detectDenomination(
         imagePath,
         currency,
       );
 
-      print('✅ Denominación: ${denomResult.denomination} (${(denomResult.confidence * 100).toStringAsFixed(1)}%)');
-      print(denomResult.reasoning);
+      print('\n✅ Denominación: ${denomResult.denomination}');
+      print('   Confianza: ${(denomResult.confidence * 100).toStringAsFixed(1)}%\n');
 
-      // 4. Análisis básico de características
-      final result = await _mlService.detectBill(imagePath);
+      // 6. Análisis de autenticidad
+      if (denomResult.confidence > 0.25) {
+        print('🔐 Iniciando análisis de autenticidad...\n');
 
-      // 5. Análisis avanzado de autenticidad
-      if (result.isBill) {
-        final advancedAnalysis = await _performAdvancedAuthentication(
-          imagePath: imagePath,
-          basicResult: result,
+        final result = await _mlService.detectBill(imagePath);
+
+        if (result.isBill) {
+          final advancedAnalysis = await _performAdvancedAuthentication(
+            imagePath: imagePath,
+            basicResult: result,
+            denomination: denomResult.denomination,
+            currency: currency,
+            billNumbers: billNumbers,
+          );
+          return advancedAnalysis;
+        }
+
+        return BillAnalysis(
+          hasBilletFeatures: result.isBill,
+          isAuthentic: result.isAuthentic,
+          confidence: denomResult.confidence,
           denomination: denomResult.denomination,
           currency: currency,
+          details: '${denomResult.reasoning}\n\n${billNumbers.summary}',
+          detectedKeywords: result.detectedKeywords,
+          billNumbers: billNumbers,
         );
-        return advancedAnalysis;
       }
 
-      // Si no es billete
+      // Sin denominación
       return BillAnalysis(
-        hasBilletFeatures: result.isBill,
-        isAuthentic: result.isAuthentic,
-        confidence: denomResult.confidence,
-        denomination: denomResult.denomination,
+        hasBilletFeatures: false,
+        isAuthentic: false,
+        confidence: 0.0,
+        denomination: 'No detectada',
         currency: currency,
-        details: denomResult.reasoning,
-        detectedKeywords: result.detectedKeywords,
+        details:
+        'No se pudo identificar la denominación del billete.\n\nAsegúrate de:\n✓ Tomar foto en luz natural\n✓ Billete completamente visible\n✓ Ángulo frontal\n✓ Foto clara y enfocada\n\n${billNumbers.summary}',
+        billNumbers: billNumbers,
       );
     } catch (e) {
-      print('❌ Error en BillDetectionService: $e');
+      print('❌ ERROR: $e\n');
       return BillAnalysis(
         hasBilletFeatures: false,
         isAuthentic: false,
         confidence: 0.0,
         denomination: 'Error',
         currency: 'UNKNOWN',
-        details: 'Error al procesar la imagen: $e',
+        details: 'Error: $e',
       );
     }
+  }
+
+  TextRecognizer _getTextRecognizer() {
+    if (!_authInitialized) {
+      _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+      _authInitialized = true;
+    }
+    return _textRecognizer;
+  }
+
+  double _calculateOCRConfidence(RecognizedText recognized) {
+    if (recognized.blocks.isEmpty) return 0.0;
+
+    double totalConfidence = 0.0;
+    int elementCount = 0;
+
+    for (final block in recognized.blocks) {
+      for (final line in block.lines) {
+        for (final element in line.elements) {
+          final conf = element.confidence ?? 0.0;
+          totalConfidence += conf;
+          elementCount++;
+        }
+      }
+    }
+
+    if (elementCount == 0) return 0.0;
+    return (totalConfidence / elementCount).clamp(0.0, 1.0);
   }
 
   /// Detecta moneda por color dominante
@@ -143,13 +193,13 @@ class BillDetectionService {
       final cy = image.height ~/ 2;
       int tR = 0, tG = 0, tB = 0, n = 0;
 
-      // Muestrear múltiples zonas (no solo centro)
+      // Muestrear múltiples zonas
       final zones = [
-        (cy ~/ 2, cx ~/ 2),      // Arriba-izquierda
-        (cy ~/ 2, cx + cx ~/ 2), // Arriba-derecha
-        (cy + cy ~/ 2, cx ~/ 2), // Abajo-izquierda
-        (cy + cy ~/ 2, cx + cx ~/ 2), // Abajo-derecha
-        (cy, cx),                // Centro
+        (cy ~/ 2, cx ~/ 2),
+        (cy ~/ 2, cx + cx ~/ 2),
+        (cy + cy ~/ 2, cx ~/ 2),
+        (cy + cy ~/ 2, cx + cx ~/ 2),
+        (cy, cx),
       ];
 
       for (final (y, x) in zones) {
@@ -162,40 +212,24 @@ class BillDetectionService {
         }
       }
 
-      if (n == 0) return 'USD'; // Default
+      if (n == 0) return 'USD';
 
       final aR = tR ~/ n;
       final aG = tG ~/ n;
       final aB = tB ~/ n;
 
-      print('🎨 Color promedio: RGB($aR, $aG, $aB)');
-
-      // USD: Verde (billetes $1, $5, $20, $50, $100)
-      // $1: Verde claro (142, 110, 48) - marrón-verdoso
-      // $5: Verde (76, 149, 109)
-      // $10: Gris-azulado (típico de USD)
-      // $20: Verde (0, 102, 204) - más azul
-      // $50: Rojo (204, 0, 0)
-      // $100: Azul oscuro (0, 51, 102)
-
-      // ECU: Más rojo/naranja
-
-      // Si es muy rojo/naranja → ECU
       if (aR > 180 && aG < 100 && aB < 100) {
         return 'ECU';
       }
 
-      // Si tiene suficiente verde o azul → USD
       if (aG > aR + 20 || aB > aR + 20) {
         return 'USD';
       }
 
-      // Si tiene componentes balanceados (típico de $10) → USD
       if (aR > 100 && aG > 100 && aB > 100) {
         return 'USD';
       }
 
-      // Default: USD (mayoría de billetes)
       return 'USD';
     } catch (e) {
       print('⚠️ Error detectando color: $e');
@@ -209,6 +243,7 @@ class BillDetectionService {
     required dynamic basicResult,
     required String denomination,
     required String currency,
+    required BillNumbers billNumbers,
   }) async {
     try {
       final file = File(imagePath);
@@ -255,38 +290,27 @@ class BillDetectionService {
 
       // DETECTOR 5: OCR + Seguridad
       print('  Detector 5: OCR + Validación...');
-      final (ocr, feat5, susp5) = await _validateOCRAndSecurity(imagePath, currency);
+      final (ocr, feat5, susp5) =
+      await _validateOCRAndSecurity(imagePath, currency);
       detectorScores['ocr'] = ocr;
       detectedFeatures.addAll(feat5);
       suspiciousIndicators.addAll(susp5);
 
-      // DETECTOR 6: Comparación con Dataset de firmas de referencia
-      print('  Detector 6: Dataset de firmas...');
-      final (datasetScore, feat6, susp6) = await _compareWithDataset(
-        imagePath: imagePath,
-        denomination: denomination,
-        currency: currency,
-        image: image,
-      );
-      detectorScores['dataset'] = datasetScore;
-      detectedFeatures.addAll(feat6);
-      suspiciousIndicators.addAll(susp6);
-
       // SCORING BAYESIANO PONDERADO
       final weights = {
-        'security':    0.25,
-        'texture':     0.15,
+        'security': 0.25,
+        'texture': 0.15,
         'perspective': 0.10,
-        'histogram':   0.15,
-        'ocr':         0.15,
-        'dataset':     0.20,
+        'histogram': 0.20,
+        'ocr': 0.15,
       };
 
       double weightedScore = 0.0;
       detectorScores.forEach((detector, score) {
         final weight = weights[detector] ?? 0.0;
         weightedScore += score * weight;
-        print('    $detector: ${(score * 100).toStringAsFixed(1)}% (peso: ${(weight * 100).toInt()}%)');
+        print(
+            '    $detector: ${(score * 100).toStringAsFixed(1)}% (peso: ${(weight * 100).toInt()}%)');
       });
 
       final isAuthentic = weightedScore >= 0.65;
@@ -305,6 +329,7 @@ class BillDetectionService {
         detectedFeatures,
         suspiciousIndicators,
         isAuthentic,
+        billNumbers,
       );
 
       return BillAnalysis(
@@ -317,6 +342,7 @@ class BillDetectionService {
         detectedKeywords: basicResult.detectedKeywords ?? [],
         detectedFeatures: detectedFeatures,
         suspiciousIndicators: suspiciousIndicators,
+        billNumbers: billNumbers,
       );
     } catch (e) {
       print('❌ Error en análisis avanzado: $e');
@@ -327,6 +353,7 @@ class BillDetectionService {
         denomination: denomination,
         currency: currency,
         details: 'Error en análisis avanzado: $e',
+        billNumbers: billNumbers,
       );
     }
   }
@@ -437,7 +464,8 @@ class BillDetectionService {
     for (int y = 0; y < image.height; y++) {
       for (int x = 0; x < image.width; x++) {
         final px = image.getPixel(x, y);
-        final gray = (0.299 * px.r + 0.587 * px.g + 0.114 * px.b).toInt();
+        final gray =
+        (0.299 * px.r + 0.587 * px.g + 0.114 * px.b).toInt();
         result.add(gray);
       }
     }
@@ -511,21 +539,11 @@ class BillDetectionService {
     gray.sort();
 
     final mean = gray.reduce((a, b) => a + b) ~/ gray.length;
-    final p5 = gray[(gray.length * 0.05).toInt()];
-    final p95 = gray[(gray.length * 0.95).toInt()];
-    final contrast = p95 - p5;
+    final min = gray.first;
+    final max = gray.last;
 
-    // ✨ Rangos adaptativos: más tolerantes con baja calidad
-    final brightOk = mean >= 50 && mean <= 200;
-    final contrastOk = contrast > 40;
-
-    // Log para debug
-    if (mean < 80 || mean > 180) {
-      print('⚠️ Brillo subóptimo ($mean), pero imagen procesable');
-    }
-    if (contrast < 80) {
-      print('⚠️ Contraste bajo ($contrast), pero aceptable');
-    }
+    final brightOk = mean >= 80 && mean <= 180;
+    final contrastOk = (max - min) > 80;
 
     return (brightOk, contrastOk);
   }
@@ -606,7 +624,10 @@ class BillDetectionService {
   }
 
   List<double> _getExpectedLBPPattern() {
-    return List<double>.filled(256, 0.004)..[128] = 0.15..[64] = 0.12..[192] = 0.10;
+    return List<double>.filled(256, 0.004)
+      ..[128] = 0.15
+      ..[64] = 0.12
+      ..[192] = 0.10;
   }
 
   double _histogramDistance(List<int> h1, List<double> h2) {
@@ -648,7 +669,7 @@ class BillDetectionService {
     return periodCount > 3;
   }
 
-  // ═══════════════════��═══════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   // DETECTOR 3: Validación de Perspectiva
   // ═══════════════════════════════════════════════════════════════
 
@@ -716,43 +737,24 @@ class BillDetectionService {
     double score = 0.0;
 
     try {
-      final gray = _toGrayscale(image);
-      final mean = gray.reduce((a, b) => a + b) ~/ gray.length;
-
-      // ✨ NUEVO: Detectar condiciones de iluminación
-      final isVeryDark = mean < 80;
-      final isVeryBright = mean > 180;
-
-      print('📊 Análisis de histograma: media=$mean, oscuro=$isVeryDark, claro=$isVeryBright');
-
       final rgbHist = _computeRGBHistogram(image);
       final rgbScore = _scoreRGBHistogram(rgbHist, currency);
+      score += rgbScore * 0.5;
 
-      // ✨ NUEVO: Pesos adaptativos según iluminación
-      if (isVeryDark || isVeryBright) {
-        score += rgbScore * 0.3;  // Reducir peso en malas condiciones
-        features.add('Histograma RGB detectado (condiciones de luz subóptimas)');
-      } else {
-        score += rgbScore * 0.5;  // Peso normal
+      if (rgbScore > 0.7) {
         features.add('Distribución RGB dentro de rangos esperados');
+      } else {
+        suspicious.add('Distribución RGB atípica');
       }
 
       final hsvHist = _computeHSVHistogram(image);
       final hsvScore = _scoreHSVHistogram(hsvHist, currency);
+      score += hsvScore * 0.5;
 
-      if (isVeryDark || isVeryBright) {
-        score += hsvScore * 0.3;
-        features.add('Histograma HSV detectado (luz variable)');
-      } else {
-        score += hsvScore * 0.5;
+      if (hsvScore > 0.7) {
         features.add('Distribución HSV característica');
-      }
-
-      // ✨ NUEVO: Alertas informativas (no rechazo automático)
-      if (mean < 60) {
-        suspicious.add('⚠️ Imagen muy oscura - considera usar luz o flash');
-      } else if (mean > 200) {
-        suspicious.add('⚠️ Imagen sobreexpuesta - evita luz directa del sol');
+      } else {
+        suspicious.add('Saturación de color anómala');
       }
 
       return (min(score, 1.0), features, suspicious);
@@ -767,7 +769,8 @@ class BillDetectionService {
     for (int y = 0; y < image.height; y++) {
       for (int x = 0; x < image.width; x++) {
         final px = image.getPixel(x, y);
-        final gray = (0.299 * px.r + 0.587 * px.g + 0.114 * px.b).toInt();
+        final gray =
+        (0.299 * px.r + 0.587 * px.g + 0.114 * px.b).toInt();
         hist[gray]++;
       }
     }
@@ -793,7 +796,8 @@ class BillDetectionService {
     for (int y = 0; y < image.height; y++) {
       for (int x = 0; x < image.width; x++) {
         final px = image.getPixel(x, y);
-        final hue = _rgbToHue(px.r.toInt(), px.g.toInt(), px.b.toInt());
+        final hue =
+        _rgbToHue(px.r.toInt(), px.g.toInt(), px.b.toInt());
         hist[hue]++;
       }
     }
@@ -843,62 +847,20 @@ class BillDetectionService {
 
     try {
       if (!_authInitialized) {
-        _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+        _textRecognizer =
+            TextRecognizer(script: TextRecognitionScript.latin);
         _authInitialized = true;
       }
 
-      // ✨ NUEVO: Intentar OCR normal primero
-      String text = '';
       final inputImage = InputImage.fromFilePath(imagePath);
-      var recognizedText = await _textRecognizer.processImage(inputImage);
-      text = recognizedText.text.toUpperCase();
-
-      // ✨ NUEVO: Si OCR falla o es muy corto, mejorar imagen y reintentar
-      if (text.isEmpty || text.length < 20) {
-        print('🔧 OCR insuficiente (${text.length} caracteres), aplicando mejoras...');
-
-        try {
-          final imageFile = File(imagePath);
-          final imageBytes = await imageFile.readAsBytes();
-          final originalImage = img.decodeImage(imageBytes);
-
-          if (originalImage != null) {
-            // ✨ Usar ImageEnhancementService para procesar
-            print('📸 Aplicando mejoras: normalización, CLAHE, denoising, sharpen...');
-            final enhancedImage = ImageEnhancementService.enhanceForAnalysis(originalImage);
-
-            // Guardar imagen temporal mejorada
-            final timestamp = DateTime.now().millisecondsSinceEpoch;
-            final tempPath = '${imageFile.parent.path}/enhanced_$timestamp.jpg';
-            final tempFile = File(tempPath);
-            await tempFile.writeAsBytes(img.encodeJpg(enhancedImage));
-
-            // Reintentar OCR con imagen mejorada
-            print('🔄 Reintentando OCR con imagen mejorada...');
-            final enhancedInputImage = InputImage.fromFilePath(tempPath);
-            recognizedText = await _textRecognizer.processImage(enhancedInputImage);
-            text = recognizedText.text.toUpperCase();
-
-            // Limpiar archivo temporal
-            try { await tempFile.delete(); } catch (_) {}
-
-            if (text.isNotEmpty && text.length > 10) {
-              print('✅ OCR exitoso después de mejoras (${text.length} caracteres)');
-              features.add('Texto legible con procesamiento de imagen');
-              score += 0.10;
-            }
-          }
-        } catch (e) {
-          print('⚠️ Error al procesar imagen: $e');
-        }
-      }
+      final recognizedText = await _textRecognizer.processImage(inputImage);
+      final text = recognizedText.text.toUpperCase();
 
       if (text.isEmpty) {
         suspicious.add('No se pudo leer texto (posible baja calidad)');
         return (0.0, features, suspicious);
       }
 
-      // ✨ Resto del código igual
       final securityKeywords = currency == 'USD'
           ? [
         'FEDERAL RESERVE NOTE',
@@ -923,7 +885,8 @@ class BillDetectionService {
 
       score = (keywordsFound / securityKeywords.length).clamp(0.0, 1.0);
 
-      final serialMatch = RegExp(r'[A-Z]{1,2}\d{6,9}[A-Z]?').hasMatch(text);
+      final serialMatch =
+      RegExp(r'[A-Z]{1,2}\d{6,9}[A-Z]?').hasMatch(text);
       if (serialMatch) {
         features.add('Número de serie detectado');
         score += 0.15;
@@ -956,12 +919,30 @@ class BillDetectionService {
       List<String> detectedFeatures,
       List<String> suspiciousIndicators,
       bool isAuthentic,
+      BillNumbers billNumbers,
       ) {
     final buffer = StringBuffer();
 
+    buffer.writeln(
+        '═══════════════════════════════════════════════════════════');
     buffer.writeln('ANÁLISIS DETALLADO DE AUTENTICIDAD');
-    buffer.writeln('═' * 50);
+    buffer.writeln(
+        '═══════════════════════════════════════════════════════════');
 
+    // Información del billete
+    buffer.writeln('\n🔢 INFORMACIÓN DEL BILLETE:');
+    buffer.writeln('   Denominación: \$${billNumbers.formattedDenomination}');
+    buffer.writeln('   Número de Serie: ${billNumbers.formattedSerialNumber}');
+    buffer.writeln('   Series/Año: ${billNumbers.formattedSeriesYear}');
+
+    if (billNumbers.cornerNumbers.isNotEmpty) {
+      buffer.writeln('   Números en esquinas:');
+      for (final num in billNumbers.cornerNumbers) {
+        buffer.writeln('   • $num');
+      }
+    }
+
+    // Características
     buffer.writeln('\n✅ CARACTERÍSTICAS POSITIVAS:');
     if (detectedFeatures.isEmpty) {
       buffer.writeln('  - Ninguna característica positiva detectada');
@@ -971,6 +952,7 @@ class BillDetectionService {
       }
     }
 
+    // Indicadores sospechosos
     buffer.writeln('\n⚠️ INDICADORES SOSPECHOSOS:');
     if (suspiciousIndicators.isEmpty) {
       buffer.writeln('  - Ningún indicador sospechoso detectado');
@@ -980,95 +962,26 @@ class BillDetectionService {
       }
     }
 
+    // Scores
     buffer.writeln('\n📊 SCORES POR DETECTOR:');
     detectorScores.forEach((detector, score) {
       buffer.writeln('  $detector: ${(score * 100).toStringAsFixed(1)}%');
     });
 
+    // Conclusión
     buffer.writeln('\n🔐 CONCLUSIÓN:');
     if (isAuthentic) {
-      buffer.writeln(
-          'Este billete tiene características consistentes con un billete auténtico.');
-      buffer.writeln('Recomendación: ✅ ACEPTAR');
+      buffer.writeln('✅ BILLETE AUTÉNTICO');
+      buffer.writeln('Score: ${(weightedScore * 100).toStringAsFixed(1)}%');
     } else {
-      buffer.writeln(
-          'Este billete presenta indicadores que sugieren que podría ser falso.');
-      buffer.writeln('Recomendación: ⚠️ VERIFICAR MANUALMENTE');
+      buffer.writeln('⚠️ BILLETE SOSPECHOSO');
+      buffer.writeln('Score: ${(weightedScore * 100).toStringAsFixed(1)}%');
     }
+
+    buffer.writeln(
+        '\n═══════════════════════════════════════════════════════════');
 
     return buffer.toString();
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // DETECTOR 6: Comparación con Dataset de Firmas
-  // ═══════════════════════════════════════════════════════════════
-
-  Future<(double, List<String>, List<String>)> _compareWithDataset({
-    required String imagePath,
-    required String denomination,
-    required String currency,
-    required img.Image image,
-  }) async {
-    final features   = <String>[];
-    final suspicious = <String>[];
-    double score     = 0.0;
-
-    try {
-      if (!_datasetInitialized) await _initDataset();
-
-      final matchResult = await _datasetService.matchAgainstLibrary(
-        imagePath, currency,
-      );
-
-      final topScore = matchResult.topMatchScore;
-      final topDenom = matchResult.topMatch;
-
-      print('    Dataset top match: \$$topDenom (${(topScore * 100).toStringAsFixed(1)}%)');
-
-      final denomKey = denomination.replaceAll(r'$', '').replaceAll('S/.', '').trim();
-      final denomMatches = topDenom == denomKey;
-
-      if (topScore >= 0.75) {
-        score = topScore;
-        features.add('Alta similitud con firma de referencia \$$topDenom (${(topScore * 100).toStringAsFixed(0)}%)');
-        if (denomMatches) {
-          features.add('Denominación confirmada por dataset');
-          score = min(score + 0.05, 1.0);
-        }
-      } else if (topScore >= 0.55) {
-        score = topScore;
-        features.add('Similitud moderada con firma \$$topDenom (${(topScore * 100).toStringAsFixed(0)}%)');
-        if (!denomMatches) {
-          suspicious.add('Denominación no coincide con el mejor match del dataset');
-          score *= 0.85;
-        }
-      } else {
-        score = topScore * 0.5;
-        suspicious.add('Baja similitud con firmas de referencia (${(topScore * 100).toStringAsFixed(0)}%)');
-      }
-
-      // Verificar gap entre 1er y 2do match
-      final allMatches = matchResult.allMatches;
-      final sortedMatches = allMatches.entries.toList()
-        ..sort((a, b) => b.value[0].compareTo(a.value[0]));
-
-      if (sortedMatches.length >= 2) {
-        final gap = topScore - sortedMatches[1].value[0];
-        if (gap > 0.15) {
-          features.add('Match inequívoco (diferencia ${(gap * 100).toStringAsFixed(0)}% sobre 2do lugar)');
-          score = min(score + 0.05, 1.0);
-        } else if (gap < 0.05) {
-          suspicious.add('Ambigüedad entre denominaciones detectada');
-          score *= 0.90;
-        }
-      }
-
-      print('    Dataset score final: ${(score * 100).toStringAsFixed(1)}%');
-      return (score.clamp(0.0, 1.0), features, suspicious);
-    } catch (e) {
-      print('⚠️ Error en _compareWithDataset: $e');
-      return (0.0, features, suspicious);
-    }
   }
 
   void dispose() {
